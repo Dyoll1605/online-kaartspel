@@ -1,456 +1,233 @@
-/* client.js
-   Regelt: lobby-flow, room join/create, UI render, kaartselectie, en realtime updates via Socket.IO.
-*/
-
 const socket = io();
+const $ = function(id) { return document.getElementById(id); };
 
-const $ = (id) => document.getElementById(id);
-
-const nameInput = $("nameInput");
-const emojiSelect = $("emojiSelect");
-const colorSelect = $("colorSelect");
-const createBtn = $("createBtn");
-const joinBtn = $("joinBtn");
-const roomInput = $("roomInput");
-const startBtn = $("startBtn");
-const leaveBtn = $("leaveBtn");
-
-const lobbyPanel = $("lobbyPanel");
-const gameSidePanel = $("gameSidePanel");
-const lobbyHint = $("lobbyHint");
-const roomPill = $("roomPill");
-const gameRoomPill = $("gameRoomPill");
-const playersList = $("playersList");
-const playersListGame = $("playersListGame");
-
-const screenTitle = $("screenTitle");
-const screenSub = $("screenSub");
-const youPill = $("youPill");
-const turnPill = $("turnPill");
-const turnBadge = $("turnBadge");
-
-const msgText = $("msgText");
-const netText = $("netText");
-
-const lobbyUIHelp = $("lobbyUIHelp");
-const gameUI = $("gameUI");
-
-const pileArea = $("pileArea");
-const handArea = $("handArea");
-
-const playBtn = $("playBtn");
-const passBtn = $("passBtn");
-const drawBtn = $("drawBtn");
-
+const nameInput    = $("nameInput");
+const emojiSelect  = $("emojiSelect");
+const colorSelect  = $("colorSelect");
+const createBtn    = $("createBtn");
+const joinBtn      = $("joinBtn");
+const roomInput    = $("roomInput");
+const startBtn     = $("startBtn");
+const leaveBtn     = $("leaveBtn");
+const roomPill     = $("roomPill");
+const playersList  = $("playersList");
+const lobbyHint    = $("lobbyHint");
+const msgText      = $("msgText");
+const turnPill     = $("turnPill");
+const youPill      = $("youPill");
+const pileArea     = $("pileArea");
+const pileLabel    = $("pileLabel");
+const handArea     = $("handArea");
 const selectionInfo = $("selectionInfo");
-
-const rulesBtn = $("rulesBtn");
-const menuBtn = $("menuBtn");
-const modalBackdrop = $("modalBackdrop");
-const closeRulesBtn = $("closeRulesBtn");
-
-const endPanel = $("endPanel");
-const endTitle = $("endTitle");
-const endDetails = $("endDetails");
-const rematchBtn = $("rematchBtn");
+const playBtn      = $("playBtn");
+const passBtn      = $("passBtn");
+const endPanel     = $("endPanel");
+const endTitle     = $("endTitle");
+const endDetails   = $("endDetails");
+const rankingEl    = $("rankingEl");
+const rematchBtn   = $("rematchBtn");
 const backLobbyBtn = $("backLobbyBtn");
 
-let state = {
-  connected: false,
-  roomCode: null,
-  you: null,               // {id,name,emoji,color}
-  phase: "lobby",          // "lobby" | "playing" | "ended"
-  players: [],             // from server (public info)
-  hand: [],                // your private hand
-  pile: null,              // {rank,count,cardsShown, lastPlayedBy, passes}
-  turnPlayerId: null,
-  hostId: null,
-  isHost: false,
-  winner: null,
-  canRematch: false
-};
+var state = { you: null, roomCode: null, hostId: null, phase: "lobby", players: [], hand: [], pile: null, turnPlayerId: null, result: null };
+var selected = [];
 
-let selectedCardIds = new Set();
-
-function getProfile() {
-  const name = (nameInput.value || "").trim().slice(0, 18) || "Speler";
-  const emoji = emojiSelect.value || "🦊";
-  const color = colorSelect.value || "#6ae4a6";
-  return { name, emoji, color };
+function profile() {
+  return { name: (nameInput.value || "").trim().slice(0,18) || "Speler", emoji: emojiSelect.value, color: colorSelect.value };
 }
 
-function setMessage(text, kind = "info") {
-  // kind is currently cosmetic; keep it simple and readable
+function msg(text, kind) {
   msgText.textContent = text;
-  if (kind === "error") msgText.style.color = "var(--danger)";
-  else if (kind === "ok") msgText.style.color = "var(--ok)";
-  else if (kind === "warn") msgText.style.color = "var(--warn)";
-  else msgText.style.color = "var(--muted)";
+  msgText.style.color = kind === "ok" ? "#6ae4a6" : kind === "error" ? "#ff6b6b" : kind === "warn" ? "#ffd166" : "#8a9bb4";
 }
 
-function updateTop() {
-  netText.textContent = state.connected ? "Online" : "Offline";
-  roomPill.textContent = state.roomCode ? `Kamer: ${state.roomCode}` : "Nog niet in een kamer";
-  gameRoomPill.textContent = state.roomCode ? `Kamer: ${state.roomCode}` : "Kamer: -";
-
-  const youLabel = state.you ? `${state.you.emoji} ${state.you.name}` : "-";
-  youPill.textContent = `Jij: ${youLabel}`;
-
-  const turnName = state.players.find(p => p.id === state.turnPlayerId)?.name || "-";
-  turnPill.textContent = `Beurt: ${turnName}`;
-  turnBadge.textContent = state.turnPlayerId === state.you?.id ? "Jij bent aan de beurt" : `Aan de beurt: ${turnName}`;
-
-  startBtn.disabled = !(state.isHost && state.phase === "lobby" && state.players.length >= 2);
-  leaveBtn.disabled = !state.roomCode;
-}
-
-function renderPlayers(listEl) {
-  listEl.innerHTML = "";
-  if (!state.players.length) return;
-
-  for (const p of state.players) {
-    const row = document.createElement("div");
-    row.className = "pRow";
-
-    const left = document.createElement("div");
-    left.className = "pLeft";
-
-    const av = document.createElement("div");
-    av.className = "avatar";
+function renderPlayers() {
+  playersList.innerHTML = "";
+  for (var i = 0; i < state.players.length; i++) {
+    var p = state.players[i];
+    var row = document.createElement("div"); row.className = "pRow";
+    var left = document.createElement("div"); left.className = "pLeft";
+    var av = document.createElement("div"); av.className = "avatar";
     av.textContent = p.emoji || "🎴";
-    av.style.borderColor = (p.color || "#6ae4a6") + "66";
-    av.style.background = (p.color || "#6ae4a6") + "22";
-
-    const nm = document.createElement("div");
-    nm.className = "pName";
-    nm.textContent = p.name + (p.id === state.hostId ? " (host)" : "") + (p.isBot ? " (dummy)" : "");
-
-    left.appendChild(av);
-    left.appendChild(nm);
-
-    const st = document.createElement("div");
-    st.className = "status";
-    const flags = [];
-    if (p.id === state.turnPlayerId && state.phase !== "lobby") flags.push("aan beurt");
-    if (p.id === state.you?.id) flags.push("jij");
-    if (state.phase !== "lobby") flags.push(`${p.cardCount ?? 0} kaarten`);
-    st.textContent = flags.join(" · ") || "";
-
-    row.appendChild(left);
-    row.appendChild(st);
-
-    listEl.appendChild(row);
+    av.style.borderColor = (p.color || "#6ae4a6") + "55";
+    av.style.background  = (p.color || "#6ae4a6") + "22";
+    var nm = document.createElement("div"); nm.className = "pName";
+    nm.textContent = p.name + (p.id === state.hostId ? " (host)" : "") + (p.id === (state.you && state.you.id) ? " ←" : "");
+    left.appendChild(av); left.appendChild(nm);
+    var right = document.createElement("div"); right.className = "pStatus";
+    var tags = [];
+    if (state.phase === "playing") tags.push(p.cardCount + " kaarten");
+    if (p.id === state.turnPlayerId && state.phase === "playing") tags.push("✦ aan beurt");
+    right.textContent = tags.join(" · ");
+    row.appendChild(left); row.appendChild(right);
+    playersList.appendChild(row);
   }
 }
 
-function showLobby() {
-  state.phase = "lobby";
-  lobbyUIHelp.classList.remove("hidden");
-  gameUI.classList.add("hidden");
-  lobbyPanel.classList.remove("hidden");
-  gameSidePanel.classList.add("hidden");
-  screenTitle.textContent = "Lobby";
-  screenSub.textContent = "Wachten op spelers…";
-  endPanel.classList.add("hidden");
-  updateTop();
-}
-
-function showGame() {
-  lobbyUIHelp.classList.add("hidden");
-  gameUI.classList.remove("hidden");
-  lobbyPanel.classList.add("hidden");
-  gameSidePanel.classList.remove("hidden");
-  screenTitle.textContent = "Aan tafel";
-  screenSub.textContent = "Speel realtime met je kamer.";
-  updateTop();
-}
-
-function showEnd() {
-  endPanel.classList.remove("hidden");
-  rematchBtn.disabled = !(state.isHost && state.canRematch);
-}
-
-function clearSelection() {
-  selectedCardIds.clear();
-}
-
-function selectionSummary() {
-  const sel = state.hand.filter(c => selectedCardIds.has(c.id));
-  if (!sel.length) return "Selecteer kaarten om te spelen.";
-  const ranks = new Set(sel.map(c => c.rank));
-  if (ranks.size > 1) return `⚠️ ${sel.length} kaarten geselecteerd (meerdere waarden). Alleen sets met gelijke waarde.`;
-  const rank = sel[0].rank;
-  return `${sel.length}× ${rank} geselecteerd`;
-}
-
-/* UI: hand */
-function renderHand() {
-  handArea.innerHTML = "";
-
-  const sorted = [...state.hand].sort((a, b) => (b.sort - a.sort) || a.suit.localeCompare(b.suit));
-  for (const c of sorted) {
-    const el = document.createElement("div");
-    el.className = "hCard";
-    if (selectedCardIds.has(c.id)) el.classList.add("selected");
-    el.dataset.id = c.id;
-
-    el.innerHTML = `
-      <div class="v">${c.rank}</div>
-      <div class="s">${c.suit}</div>
-    `;
-
-    el.addEventListener("click", () => {
-      if (selectedCardIds.has(c.id)) selectedCardIds.delete(c.id);
-      else selectedCardIds.add(c.id);
-      renderHand();
-      selectionInfo.textContent = selectionSummary();
-      updateActionButtons();
-    });
-
-    handArea.appendChild(el);
-  }
-}
-
-/* UI: pile */
 function renderPile() {
+  // ALTIJD eerst leegmaken — cruciale fix
   pileArea.innerHTML = "";
-  const pile = state.pile;
 
-  if (!pile || !pile.cardsShown?.length) {
-    const t = document.createElement("div");
-    t.className = "tiny";
-    t.textContent = "Nog geen kaarten gespeeld. Start een slag.";
-    pileArea.appendChild(t);
+  if (!state.pile) {
+    pileLabel.textContent = "Tafel leeg — startspeler opent de ronde.";
     return;
   }
 
-  for (const shown of pile.cardsShown) {
-    const el = document.createElement("div");
-    el.className = "cardMini";
-    el.innerHTML = `<div class="v">${shown.rank}</div><div class="s">${shown.suit}</div>`;
+  pileLabel.textContent = "Op tafel: " + state.pile.count + "x " + state.pile.rank;
+
+  var cards = state.pile.cardsShown || [];
+  for (var i = 0; i < cards.length; i++) {
+    var c = cards[i];
+    var el = document.createElement("div"); el.className = "playCard";
+    if (c.suit === "♥" || c.suit === "♦") el.classList.add("red");
+    el.innerHTML = '<span class="cRank">' + c.rank + '</span><span class="cSuit">' + c.suit + '</span>';
     pileArea.appendChild(el);
   }
 }
 
-/* Enable/disable play/pass based on server state + your selection */
-function updateActionButtons() {
-  const yourTurn = state.turnPlayerId && state.you && state.turnPlayerId === state.you.id;
-  const ended = state.phase === "ended";
-
-  if (!yourTurn || ended) {
-    playBtn.disabled = true;
-    passBtn.disabled = true;
-    return;
+function renderHand() {
+  handArea.innerHTML = "";
+  var sorted = state.hand.slice().sort(function(a,b) { return (b.sort - a.sort) || a.suit.localeCompare(b.suit); });
+  for (var i = 0; i < sorted.length; i++) {
+    (function(c) {
+      var el = document.createElement("div");
+      el.className = "handCard" + (selected.indexOf(c.id) !== -1 ? " selected" : "");
+      if (c.suit === "♥" || c.suit === "♦") el.classList.add("red");
+      el.innerHTML = '<span class="cRank">' + c.rank + '</span><span class="cSuit">' + c.suit + '</span>';
+      el.onclick = function() {
+        var idx = selected.indexOf(c.id);
+        if (idx !== -1) selected.splice(idx, 1); else selected.push(c.id);
+        renderHand(); updateButtons();
+      };
+      handArea.appendChild(el);
+    })(sorted[i]);
   }
-
-  // Pass is always allowed on your turn while playing.
-  passBtn.disabled = false;
-
-  // Play is allowed if selection is non-empty (server validates for real).
-  const selCount = selectedCardIds.size;
-  playBtn.disabled = selCount === 0;
-
-  // Tiny hint
-  selectionInfo.textContent = selectionSummary();
 }
 
-function updateLobbyHint() {
-  if (!state.roomCode) {
-    lobbyHint.textContent = "Maak een kamer of join met een code.";
-    return;
-  }
-  if (state.players.length < 2) lobbyHint.textContent = "Wachten op andere spelers… (minstens 2 nodig)";
-  else if (state.isHost) lobbyHint.textContent = "Je bent host. Je kunt het spel starten.";
-  else lobbyHint.textContent = "Wachten tot host het spel start…";
+function selSummary() {
+  var cards = state.hand.filter(function(c) { return selected.indexOf(c.id) !== -1; });
+  if (!cards.length) return "Selecteer kaarten (gelijke waarde).";
+  var rank = cards[0].rank;
+  for (var i = 0; i < cards.length; i++) if (cards[i].rank !== rank) return "Selecteer alleen kaarten van dezelfde waarde.";
+  return cards.length + "x " + rank + " geselecteerd";
 }
 
-function applyServerSnapshot(snap) {
-  // Snap is compact and comes from server
-  state.roomCode = snap.roomCode ?? state.roomCode;
-  state.phase = snap.phase ?? state.phase;
-  state.players = snap.players ?? state.players;
-  state.hostId = snap.hostId ?? state.hostId;
-  state.turnPlayerId = snap.turnPlayerId ?? state.turnPlayerId;
-  state.pile = snap.pile ?? state.pile;
-  state.winner = snap.winner ?? null;
-  state.canRematch = !!snap.canRematch;
+function updateButtons() {
+  selectionInfo.textContent = selSummary();
+  var yourTurn = state.phase === "playing" && state.you && state.turnPlayerId === state.you.id;
+  playBtn.disabled = !yourTurn || selected.length === 0;
+  passBtn.disabled = !yourTurn;
+  startBtn.disabled = !(state.phase === "lobby" && state.players.length >= 2 && state.you && state.you.id === state.hostId);
+  leaveBtn.disabled = !state.roomCode;
+  var turnName = "";
+  for (var i = 0; i < state.players.length; i++) if (state.players[i].id === state.turnPlayerId) { turnName = state.players[i].name; break; }
+  turnPill.textContent = "Beurt: " + (turnName || "—");
+  youPill.textContent  = state.you ? state.you.emoji + " " + state.you.name : "—";
+  roomPill.textContent = state.roomCode ? "Kamer: " + state.roomCode : "Nog niet in een kamer";
+  if (!state.roomCode) lobbyHint.textContent = "Maak of join een kamer.";
+  else if (state.players.length < 2) lobbyHint.textContent = "Wacht op meer spelers (min 2).";
+  else if (state.you && state.you.id === state.hostId) lobbyHint.textContent = "Je bent host — je kunt het spel starten.";
+  else lobbyHint.textContent = "Wachten tot host start...";
+}
 
-  // personal hand
-  if (snap.hand) state.hand = snap.hand;
+function showEnd(result) {
+  endPanel.style.display = "block";
+  var loser = null;
+  if (result && result.ranking) for (var i = 0; i < result.ranking.length; i++) if (result.ranking[i].id === result.loserId) { loser = result.ranking[i]; break; }
+  endTitle.textContent   = loser ? "Verliezer: " + loser.name + " 💀" : "Spel klaar!";
+  endDetails.textContent = "Iedereen behalve de verliezer heeft zijn kaarten weggespeeld.";
+  rankingEl.innerHTML = "";
+  if (result && result.ranking) {
+    for (var j = 0; j < result.ranking.length; j++) {
+      var p = result.ranking[j];
+      var line = document.createElement("div");
+      line.textContent = (j+1) + ". " + (p.emoji||"🎴") + " " + p.name + (p.id === result.loserId ? " ← verliezer" : "");
+      rankingEl.appendChild(line);
+    }
+  }
+  rematchBtn.disabled = !(state.you && state.you.id === state.hostId);
+}
 
-  state.isHost = state.you && state.hostId === state.you.id;
-
-  updateTop();
-  updateLobbyHint();
-  renderPlayers(playersList);
-  renderPlayers(playersListGame);
-  renderPile();
+function applySnap(snap) {
+  state.roomCode     = snap.roomCode;
+  state.phase        = snap.phase;
+  state.hostId       = snap.hostId;
+  state.players      = snap.players || [];
+  state.turnPlayerId = snap.turnPlayerId;
+  state.hand         = snap.hand    || [];
+  state.pile         = snap.pile;    // null = tafel leeg
+  state.result       = snap.result;
+  renderPlayers();
+  renderPile();   // leegt altijd eerst, dan vult indien nodig
   renderHand();
-
-  // Screen switching
-  if (state.phase === "lobby") showLobby();
-  if (state.phase === "playing") showGame();
-  if (state.phase === "ended") {
-    showGame();
-    endTitle.textContent = state.winner ? `${state.winner.name} heeft gewonnen!` : "Einde";
-    endDetails.textContent = snap.endReason || "Spel afgelopen.";
-    showEnd();
-  }
-
-  updateActionButtons();
+  updateButtons();
+  if (state.phase === "ended" && state.result) showEnd(state.result);
+  else endPanel.style.display = "none";
 }
 
-/* URL room auto-join */
-function readRoomFromURL() {
-  const url = new URL(window.location.href);
-  const room = url.searchParams.get("room");
-  if (room) {
-    roomInput.value = room.toUpperCase().slice(0, 6);
-  }
-}
+// URL: ?room=XXXX
+(function() {
+  var r = new URLSearchParams(window.location.search).get("room");
+  if (r) roomInput.value = r.toUpperCase();
+})();
 
-function setURLRoom(roomCode) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("room", roomCode);
-  window.history.replaceState({}, "", url.toString());
-}
-
-/* --- Socket events --- */
-socket.on("connect", () => {
-  state.connected = true;
-  setMessage("Verbonden. Kies een kamer.", "ok");
-  updateTop();
-});
-
-socket.on("disconnect", () => {
-  state.connected = false;
-  setMessage("Verbinding verbroken. Refresh indien nodig.", "error");
-  updateTop();
-});
-
-socket.on("roomUpdate", (snap) => {
-  applyServerSnapshot(snap);
-});
-
-socket.on("toast", ({ text, kind }) => {
-  setMessage(text, kind || "info");
-});
-
-socket.on("kicked", ({ reason }) => {
-  setMessage(reason || "Je bent uit de kamer gehaald.", "warn");
-  // Reset local
-  state.roomCode = null;
-  state.phase = "lobby";
-  state.players = [];
-  state.hand = [];
-  state.pile = null;
-  state.turnPlayerId = null;
-  state.hostId = null;
-  state.isHost = false;
-  setURLRoom("");
-  showLobby();
-});
-
-/* --- Button handlers --- */
-createBtn.addEventListener("click", () => {
-  const profile = getProfile();
-  socket.emit("createRoom", profile, (res) => {
-    if (!res?.ok) {
-      setMessage(res?.error || "Kon kamer niet maken.", "error");
-      return;
-    }
+createBtn.onclick = function() {
+  socket.emit("createRoom", profile(), function(res) {
+    if (!res || !res.ok) return msg((res && res.error) || "Kon kamer niet maken.", "error");
     state.you = res.you;
-    setURLRoom(res.roomCode);
-    setMessage(`Kamer ${res.roomCode} aangemaakt. Deel de link/code.`, "ok");
+    var url = new URL(window.location.href);
+    url.searchParams.set("room", res.roomCode);
+    window.history.replaceState({}, "", url.toString());
+    msg("Kamer " + res.roomCode + " gemaakt. Deel de link!", "ok");
   });
-});
+};
 
-joinBtn.addEventListener("click", () => {
-  const code = (roomInput.value || "").trim().toUpperCase();
-  if (!code) return setMessage("Vul een kamercode in.", "warn");
-
-  const profile = getProfile();
-  socket.emit("joinRoom", { roomCode: code, profile }, (res) => {
-    if (!res?.ok) {
-      setMessage(res?.error || "Join mislukt.", "error");
-      return;
-    }
+joinBtn.onclick = function() {
+  var code = (roomInput.value || "").trim().toUpperCase();
+  if (!code) return msg("Vul een kamercode in.", "error");
+  socket.emit("joinRoom", { roomCode: code, profile: profile() }, function(res) {
+    if (!res || !res.ok) return msg((res && res.error) || "Joinen mislukt.", "error");
     state.you = res.you;
-    setURLRoom(code);
-    setMessage(`Joined kamer ${code}.`, "ok");
+    msg("Joined kamer " + code + ".", "ok");
   });
-});
+};
 
-startBtn.addEventListener("click", () => {
-  socket.emit("startGame", {}, (res) => {
-    if (!res?.ok) setMessage(res?.error || "Kon spel niet starten.", "error");
+startBtn.onclick = function() {
+  socket.emit("startGame", {}, function(res) {
+    if (!res || !res.ok) msg((res && res.error) || "Starten mislukt.", "error");
   });
-});
+};
 
-leaveBtn.addEventListener("click", () => {
-  socket.emit("leaveRoom", {}, () => {});
-  setMessage("Je hebt de kamer verlaten.", "info");
-
-  // local reset
-  state.roomCode = null;
-  state.phase = "lobby";
-  state.players = [];
-  state.hand = [];
-  state.pile = null;
-  state.turnPlayerId = null;
-  state.hostId = null;
-  state.isHost = false;
-  clearSelection();
-  setURLRoom("");
-  showLobby();
-});
-
-menuBtn.addEventListener("click", () => {
-  // Go back to lobby state (but remain in room). Useful if someone wants to stop.
-  socket.emit("backToLobby", {}, (res) => {
-    if (!res?.ok) setMessage(res?.error || "Kon niet terug naar lobby.", "error");
+leaveBtn.onclick = function() {
+  socket.emit("leaveRoom", {}, function() {
+    state = { you: null, roomCode: null, hostId: null, phase: "lobby", players: [], hand: [], pile: null, turnPlayerId: null, result: null };
+    selected = [];
+    renderPlayers(); renderPile(); renderHand(); updateButtons();
+    msg("Je hebt de kamer verlaten.", "info");
   });
-});
+};
 
-playBtn.addEventListener("click", () => {
-  const cards = state.hand.filter(c => selectedCardIds.has(c.id)).map(c => c.id);
-  socket.emit("playCards", { cardIds: cards }, (res) => {
-    if (!res?.ok) {
-      setMessage(res?.error || "Ongeldige zet.", "error");
-      return;
-    }
-    clearSelection();
-    renderHand();
-    selectionInfo.textContent = selectionSummary();
-    updateActionButtons();
+playBtn.onclick = function() {
+  var ids = state.hand.filter(function(c) { return selected.indexOf(c.id) !== -1; }).map(function(c) { return c.id; });
+  socket.emit("playCards", { cardIds: ids }, function(res) {
+    if (!res || !res.ok) return msg((res && res.error) || "Ongeldige zet.", "error");
+    selected = [];
+    updateButtons();
   });
-});
+};
 
-passBtn.addEventListener("click", () => {
-  socket.emit("pass", {}, (res) => {
-    if (!res?.ok) setMessage(res?.error || "Kon niet passen.", "error");
+passBtn.onclick = function() {
+  socket.emit("pass", {}, function(res) {
+    if (!res || !res.ok) msg((res && res.error) || "Passen mislukt.", "error");
   });
-});
+};
 
-/* Rules modal */
-rulesBtn?.addEventListener("click", () => modalBackdrop.style.display = "flex");
-closeRulesBtn?.addEventListener("click", () => modalBackdrop.style.display = "none");
-modalBackdrop.addEventListener("click", (e) => {
-  if (e.target === modalBackdrop) modalBackdrop.style.display = "none";
-});
+rematchBtn.onclick   = function() { socket.emit("rematch",      {}, function(res) { if (!res||!res.ok) msg(res&&res.error,"error"); }); };
+backLobbyBtn.onclick = function() { socket.emit("backToLobby",  {}, function() {}); };
 
-/* End screen */
-rematchBtn.addEventListener("click", () => {
-  socket.emit("rematch", {}, (res) => {
-    if (!res?.ok) setMessage(res?.error || "Kon geen rematch starten.", "error");
-  });
-});
+socket.on("connect",    function() { msg("Verbonden.", "ok"); });
+socket.on("disconnect", function() { msg("Verbinding verbroken.", "error"); });
+socket.on("roomUpdate", function(snap) { applySnap(snap); });
+socket.on("toast",      function(t) { msg(t.text, t.kind); });
 
-backLobbyBtn.addEventListener("click", () => {
-  socket.emit("backToLobby", {}, () => {});
-});
-
-/* Init */
-readRoomFromURL();
-setMessage("Kies een naam, maak een kamer of join via code.", "info");
-showLobby();
+msg("Klaar. Maak of join een kamer.");
+updateButtons();
