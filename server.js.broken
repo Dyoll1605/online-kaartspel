@@ -1,0 +1,597 @@
+/**
+ * Definitieve servercode volgens jouw specificatie.
+ *
+ * Kernregels:
+ * 1) Delen:
+ *    - Alle deelnemers krijgen exact evenveel kaarten.
+ *    - Kaarten die overblijven na delen: verwijder eerst alle 4-en uit dat restant, negeer de rest.
+ *
+ * 2) Ronde (1 lap):
+ *    - Startspeler speelt 1 kaart of set gelijke kaarten.
+ *    - Daarna krijgt iedere actieve speler (hand > 0) precies één actie, met de klok mee.
+ *    - Actie = hoger spelen (zelfde aantal) of 3 (direct ronde-win) of pass.
+ *    - Niemand krijgt een tweede actie in dezelfde ronde.
+ *
+ * 3) Winnaar ronde:
+ *    - 3: direct winnen, ronde eindigt meteen.
+ *    - Anders: winnaar is de laatste geldige play (dus hoogste set).
+ *    - Na einde ronde: tafel (pile) wordt leeggemaakt en winnaar start nieuwe ronde.
+ *
+ * 4) Einde spel:
+ *    - Spel gaat door totdat er nog 1 speler kaarten in hand heeft.
+ *    - Die laatste speler is de verliezer.
+ */
+
+const path = require("path");
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+const PORT = process.env.PORT || 3000;
+app.use(express.static(path.join(__dirname, "public")));
+
+// Rangorde laag -> hoog (3 is hoogste)
+const RANKS = ["4","5","6","7","8","9","10","J","Q","K","A","2","3"];
+const RANK_SORT = Object.fromEntries(RANKS.map((r, i) => [r, i]));
+const SUITS = ["♣","♦","♥","♠"];
+
+function makeDeck(numDecks = 1) {
+  const deck = [];
+  for (let d = 0; d < numDecks; d++) {
+    for (const suit of SUITS) {
+      for (const rank of RANKS) {
+        deck.push({
+          id: `${d}-${rank}-${suit}-${Math.random().toString(16).slice(2, 8)}`,
+          rank,
+          suit,
+          sort: RANK_SORT[rank],
+        });
+      }
+    }
+  }
+  return deck;
+}
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function genRoomCode() {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 4; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+/**
+ * Room shape:
+ * {
+ *   code, hostId,
+ *   phase: "lobby"|"playing"|"ended",
+ *   players: [{id,name,emoji,color,socketId,hand:[]}],
+ *   turnIndex,
+ *   round: { order:[playerId,...], i:number, acted:Set, pile:null|{rank,count,cardsShown,lastPlayedBy}, starterId },
+ *   finishOrder: [playerId,...],
+ *   result: null|{ loserId, ranking:[playerId,...] }
+ * }
+ */
+const rooms = new Map();
+
+/* ---------- helpers ---------- */
+
+function publicPlayer(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    emoji: p.emoji,
+    color: p.color,
+    cardCount: p.hand.length,
+  };
+}
+
+function snapshotFor(room, playerId) {
+  const you = room.players.find(p => p.id === playerId);
+  const turnPlayer = room.phase === "playing" ? room.players[room.turnIndex] : null;
+
+  const result = room.result ? {
+    loserId: room.result.loserId,
+    ranking: room.result.ranking.map(id => {
+      const p = room.players.find(x => x.id === id);
+      return p ? publicPlayer(p) : { id, name:"?", emoji:"🎴", color:"#9fb0c3", cardCount:0 };
+    })
+  } : null;
+
+  return {
+    roomCode: room.code,
+    phase: room.phase,
+    hostId: room.hostId,
+    turnPlayerId: turnPlayer?.id ?? null,
+    players: room.players.map(publicPlayer),
+    hand: you?.hand ?? [],
+    pile: room.round?.pile ?? null, // tafel
+    result
+  };
+}
+
+function broadcast(room) {
+  for (const p of room.players) {
+    io.to(p.socketId).emit("roomUpdate", snapshotFor(room, p.id));
+  }
+}
+
+function toast(room, text, kind="info") {
+  for (const p of room.players) {
+    io.to(p.socketId).emit("toast", { text, kind });
+  }
+}
+
+function currentPlayer(room) {
+  return room.players[room.turnIndex];
+}
+
+function setTurnTo(room, playerId) {
+  const idx = room.players.findIndex(p => p.id === playerId);
+  room.turnIndex = idx >= 0 ? idx : 0;
+}
+
+function activePlayers(room) {
+  return room.players.filter(p => p.hand.length > 0);
+}
+
+function clockwiseOrderFrom(room, starterId) {
+  const n = room.players.length;
+  const startIdx = room.players.findIndex(p => p.id === starterId);
+  const order = [];
+  for (let k = 0; k < n; k++) {
+    const idx = (startIdx + k) % n;
+    const p = room.players[idx];
+    if (p.hand.length > 0) order.push(p.id);
+  }
+  return order;
+}
+
+function dealEqualHands(room) {
+  // decks: 2 decks bij 5+ spelers, anders 1
+  const numDecks = room.players.length >= 5 ? 2 : 1;
+  const deck = shuffle(makeDeck(numDecks));
+
+  // Alle spelers evenveel: base = floor(deck / players)
+  const n = room.players.length;
+  const base = Math.floor(deck.length / n);
+
+  // Deel base kaarten p.p.
+  for (const p of room.players) p.hand = [];
+  for (let i = 0; i < base; i++) {
+    for (const p of room.players) {
+      p.hand.push(deck.pop());
+    }
+  }
+
+  // Restant kaarten: eerst 4-en eruit, rest negeren.
+  const remainder = deck; // wat over is
+  const remainderWithout4 = remainder.filter(c => c.rank !== "4");
+  // "4-en eruit" betekent: discard 4-en expliciet.
+  // De rest negeren: we doen verder niets met remainderWithout4.
+  void remainderWithout4;
+}
+
+function markFinished(room, playerId) {
+  const p = room.players.find(x => x.id === playerId);
+  if (!p) return;
+  if (p.hand.length === 0 && !room.finishOrder.includes(p.id)) {
+    room.finishOrder.push(p.id);
+    toast(room, `${p.name} is klaar (geen kaarten).`, "ok");
+  }
+}
+
+function checkGameEnd(room) {
+  const still = room.players.filter(p => p.hand.length > 0);
+  if (still.length <= 1) {
+    room.phase = "ended";
+    const loser = still[0] || null;
+
+    const ranking = [...room.finishOrder];
+    if (loser && !ranking.includes(loser.id)) ranking.push(loser.id);
+
+    room.result = { loserId: loser ? loser.id : null, ranking };
+    toast(room, loser ? `Spel klaar. Verliezer: ${loser.name}.` : "Spel klaar.", "warn");
+    return true;
+  }
+  return false;
+}
+
+/* ---------- round logic (1 lap) ---------- */
+
+function startRound(room, starterId) {
+  // order = actieve spelers (hand>0) vanaf starter, met de klok mee
+  const order = clockwiseOrderFrom(room, starterId);
+
+  room.round = {
+    starterId,
+    order,
+    i: 0,
+    acted: new Set(),
+    pile: null
+  };
+
+  // zet beurt op starter
+  setTurnTo(room, starterId);
+
+  toast(room, `Nieuwe ronde. ${currentPlayer(room).name} begint.`, "info");
+}
+
+function validatePlay(room, player, cardIds) {
+  if (!Array.isArray(cardIds) || cardIds.length === 0) {
+    return { ok:false, error:"Selecteer minimaal één kaart." };
+  }
+  const cards = cardIds.map(id => player.hand.find(c => c.id === id)).filter(Boolean);
+  if (cards.length !== cardIds.length) return { ok:false, error:"Je speelt kaarten die je niet hebt." };
+
+  const rank = cards[0].rank;
+  if (!cards.every(c => c.rank === rank)) return { ok:false, error:"Alle kaarten moeten dezelfde waarde hebben." };
+
+  const count = cards.length;
+
+  // 3: altijd geldig, direct ronde win
+  if (rank === "3") {
+    return { ok:true, play:{ rank, count, isThree:true, cardsShown: cards.map(({rank,suit})=>({rank,suit})) } };
+  }
+
+  const pile = room.round.pile;
+  if (pile) {
+    if (count !== pile.count) return { ok:false, error:`Je moet exact ${pile.count} kaart(en) spelen.` };
+    if (RANK_SORT[rank] <= RANK_SORT[pile.rank]) return { ok:false, error:"Ongeldige zet: te laag. Je moet hoger spelen." };
+  }
+
+  return { ok:true, play:{ rank, count, isThree:false, cardsShown: cards.map(({rank,suit})=>({rank,suit})) } };
+}
+
+function applyPlay(room, player, cardIds, play) {
+  player.hand = player.hand.filter(c => !cardIds.includes(c.id));
+  room.round.pile = {
+    rank: play.rank,
+    count: play.count,
+    cardsShown: play.cardsShown,
+    lastPlayedBy: player.id
+  };
+}
+
+function advanceToNextInLap(room) {
+  // ga naar volgende id in round.order dat nog niet geacteerd heeft
+  while (room.round.i < room.round.order.length) {
+    const nextId = room.round.order[room.round.i];
+    room.round.i++;
+
+    // speler kan inmiddels 0 kaarten hebben: dan skip (maar telt ook als "niet-actief")
+    const p = room.players.find(x => x.id === nextId);
+    if (!p || p.hand.length === 0) continue;
+
+    if (!room.round.acted.has(nextId)) {
+      setTurnTo(room, nextId);
+      return true;
+    }
+  }
+  return false;
+}
+
+    return;
+  }
+
+  // 3) bepaal starter voor volgende ronde
+  let starterId = winnerId;
+  const w = room.players.find(x => x.id === winnerId);
+  if (!w || w.hand.length === 0) {
+    const idx = room.players.findIndex(x => x.id === winnerId);
+    for (let k = 1; k <= room.players.length; k++) {
+      const p = room.players[(idx + k) % room.players.length];
+      if (p.hand.length > 0) { starterId = p.id; break; }
+    }
+  }
+
+  // 4) start volgende ronde nét na het leegmaken (zichtbaar “lege 
+tafel” moment)
+  setTimeout(() => {
+    startRound(room, starterId);
+    broadcast(room);
+  }, 150);
+}
+unction 
+endRoundAndRestart(room, winnerId) {
+  // *** Cruciaal: tafel leegmaken na elke ronde ***
+  room.round.pile = null;
+
+  const winner = room.players.find(p => p.id === winnerId);
+  toast(room, `Ronde gewonnen door ${winner?.name || "?"}. Tafel leeg.`, "ok");
+
+  // als spel eindigt, niet opnieuw starten
+  if (checkGameEnd(room)) return;
+
+  // winna(a)r start volgende ronde (als winner geen kaarten meer heeft: volgende actieve vanaf winner-positie)
+  let starterId = winnerId;
+  const w = room.players.find(x => x.id === winnerId);
+  if (!w || w.hand.length === 0) {
+    // kies eerste actieve speler in clockwise volgorde na winnaar
+    const idx = room.players.findIndex(x => x.id === winnerId);
+    for (let k = 1; k <= room.players.length; k++) {
+      const p = room.players[(idx + k) % room.players.length];
+      if (p.hand.length > 0) { starterId = p.id; break; }
+    }
+  }
+
+  startRound(room, starterId);
+  // round.order reset, i reset, acted reset
+  room.round.i = 0;
+  room.round.acted.clear();
+  // startspeler krijgt nu direct beurt
+  broadcast(room);
+}
+
+function finishLapIfNeeded(room) {
+  const pile = room.round.pile;
+  // starter moet openen, dus pile hoort aanwezig te zijn
+  if (!pile || !pile.lastPlayedBy) return;
+  endRoundAndRestart(room, pile.lastPlayedBy);
+}
+
+/* ---------- sockets ---------- */
+
+io.on("connection", (socket) => {
+  socket.data.roomCode = null;
+
+  socket.on("createRoom", (profile, cb) => {
+    let code;
+    do { code = genRoomCode(); } while (rooms.has(code));
+
+    const you = {
+      id: socket.id,
+      name: (profile?.name || "Speler").slice(0, 18),
+      emoji: profile?.emoji || "🦊",
+      color: profile?.color || "#6ae4a6",
+      socketId: socket.id,
+      hand: []
+    };
+
+    const room = {
+      code,
+      hostId: you.id,
+      phase: "lobby",
+      players: [you],
+      turnIndex: 0,
+      round: null,
+      finishOrder: [],
+      result: null
+    };
+
+    rooms.set(code, room);
+    socket.join(code);
+    socket.data.roomCode = code;
+
+    cb?.({ ok:true, roomCode: code, you: publicPlayer(you) });
+    toast(room, `${you.name} maakte kamer ${code}.`, "ok");
+    broadcast(room);
+  });
+
+  socket.on("joinRoom", ({ roomCode, profile }, cb) => {
+    const code = (roomCode || "").toUpperCase().slice(0, 6);
+    const room = rooms.get(code);
+    if (!room) return cb?.({ ok:false, error:"Kamer niet gevonden." });
+    if (room.phase !== "lobby") return cb?.({ ok:false, error:"Spel is al gestart." });
+
+    const you = {
+      id: socket.id,
+      name: (profile?.name || "Speler").slice(0, 18),
+      emoji: profile?.emoji || "🦊",
+      color: profile?.color || "#6ae4a6",
+      socketId: socket.id,
+      hand: []
+    };
+
+    room.players.push(you);
+    socket.join(code);
+    socket.data.roomCode = code;
+
+    cb?.({ ok:true, roomCode: code, you: publicPlayer(you) });
+    toast(room, `${you.name} joined.`, "ok");
+    broadcast(room);
+  });
+
+  socket.on("startGame", (_, cb) => {
+    const code = socket.data.roomCode;
+    const room = rooms.get(code);
+    if (!room) return cb?.({ ok:false, error:"Kamer niet gevonden." });
+    if (room.hostId !== socket.id) return cb?.({ ok:false, error:"Alleen host kan starten." });
+    if (room.players.length < 2) return cb?.({ ok:false, error:"Minstens 2 spelers nodig." });
+
+    room.phase = "playing";
+    room.finishOrder = [];
+    room.result = null;
+
+    dealEqualHands(room);
+
+    // startspeler = host (of eerste speler) met kaarten
+    let starterId = room.hostId;
+    if (!room.players.find(p => p.id === starterId && p.hand.length > 0)) {
+      starterId = room.players.find(p => p.hand.length > 0)?.id || room.players[0].id;
+    }
+
+    startRound(room, starterId);
+
+    // starter moet openen: i=0 en acted leeg, maar turn is starter.
+    broadcast(room);
+    cb?.({ ok:true });
+  });
+
+  socket.on("playCards", ({ cardIds }, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room) return cb?.({ ok:false, error:"Kamer niet gevonden." });
+    if (room.phase !== "playing") return cb?.({ ok:false, error:"Spel is niet bezig." });
+
+    const p = currentPlayer(room);
+    if (!p || p.id !== socket.id) return cb?.({ ok:false, error:"Ander speler is aan de beurt." });
+    if (p.hand.length === 0) return cb?.({ ok:false, error:"Je hebt geen kaarten meer." });
+
+    // 1 actie per ronde
+    if (room.round.acted.has(p.id)) return cb?.({ ok:false, error:"Je hebt al een actie gedaan in deze ronde." });
+
+    const valid = validatePlay(room, p, cardIds);
+    if (!valid.ok) return cb?.(valid);
+
+    room.round.acted.add(p.id);
+    applyPlay(room, p, cardIds, valid.play);
+    markFinished(room, p.id);
+
+    // 3 = direct ronde win: tafel leeg + nieuwe ronde
+    if (valid.play.isThree) {
+      toast(room, `🟢 ${p.name} speelde een 3: directe ronde-win.`, "ok");
+      broadcast(room);
+      endRoundAndRestart(room, p.id);
+      return cb?.({ ok:true });
+    }
+
+    // Volgende speler in de lap
+    broadcast(room);
+    const moved = advanceToNextInLap(room);
+    if (!moved) {
+      // lap klaar -> winnaar = lastPlayedBy -> tafel leeg -> nieuwe ronde
+      finishLapIfNeeded(room);
+    } else {
+      broadcast(room);
+    }
+
+    cb?.({ ok:true });
+  });
+
+  socket.on("pass", (_, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room) return cb?.({ ok:false, error:"Kamer niet gevonden." });
+    if (room.phase !== "playing") return cb?.({ ok:false, error:"Spel is niet bezig." });
+
+    const p = currentPlayer(room);
+    if (!p || p.id !== socket.id) return cb?.({ ok:false, error:"Ander speler is aan de beurt." });
+    if (p.hand.length === 0) return cb?.({ ok:false, error:"Je hebt geen kaarten meer." });
+
+    // 1 actie per ronde
+    if (room.round.acted.has(p.id)) return cb?.({ ok:false, error:"Je hebt al een actie gedaan in deze ronde." });
+
+    // starter moet openen met play
+    if (!room.round.pile && room.round.starterId === p.id) {
+      return cb?.({ ok:false, error:"Starter moet de ronde openen met een kaart of set." });
+    }
+
+    room.round.acted.add(p.id);
+    toast(room, `${p.name} past.`, "info");
+
+    const moved = advanceToNextInLap(room);
+    if (!moved) {
+      finishLapIfNeeded(room);
+    } else {
+      broadcast(room);
+    }
+
+    cb?.({ ok:true });
+  });
+
+  socket.on("leaveRoom", (_, cb) => {
+    const code = socket.data.roomCode;
+    const room = rooms.get(code);
+    if (!room) return cb?.({ ok:true });
+
+    room.players = room.players.filter(p => p.id !== socket.id);
+    socket.leave(code);
+    socket.data.roomCode = null;
+
+    if (room.players.length === 0) {
+      rooms.delete(code);
+      return cb?.({ ok:true });
+    }
+
+    if (room.hostId === socket.id) {
+      room.hostId = room.players[0]?.id || null;
+      toast(room, "Host wissel.", "warn");
+    }
+
+    // Veilig: terug naar lobby
+    room.phase = "lobby";
+    room.round = null;
+    room.finishOrder = [];
+    room.result = null;
+    for (const p of room.players) p.hand = [];
+
+    toast(room, "Terug naar lobby.", "warn");
+    broadcast(room);
+    cb?.({ ok:true });
+  });
+
+  socket.on("backToLobby", (_, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room) return cb?.({ ok:false, error:"Kamer niet gevonden." });
+
+    room.phase = "lobby";
+    room.round = null;
+    room.finishOrder = [];
+    room.result = null;
+    for (const p of room.players) p.hand = [];
+
+    toast(room, "Terug naar lobby.", "info");
+    broadcast(room);
+    cb?.({ ok:true });
+  });
+
+  socket.on("rematch", (_, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room) return cb?.({ ok:false, error:"Kamer niet gevonden." });
+    if (room.hostId !== socket.id) return cb?.({ ok:false, error:"Alleen host kan rematch starten." });
+
+    room.phase = "playing";
+    room.finishOrder = [];
+    room.result = null;
+
+    dealEqualHands(room);
+
+    let starterId = room.hostId;
+    if (!room.players.find(p => p.id === starterId && p.hand.length > 0)) {
+      starterId = room.players.find(p => p.hand.length > 0)?.id || room.players[0].id;
+    }
+
+    startRound(room, starterId);
+    broadcast(room);
+    cb?.({ ok:true });
+  });
+
+  socket.on("disconnect", () => {
+    const code = socket.data.roomCode;
+    const room = rooms.get(code);
+    if (!room) return;
+
+    room.players = room.players.filter(p => p.id !== socket.id);
+
+    if (room.players.length === 0) {
+      rooms.delete(code);
+      return;
+    }
+
+    if (room.hostId === socket.id) room.hostId = room.players[0]?.id || null;
+
+    // Veilig: terug naar lobby
+    room.phase = "lobby";
+    room.round = null;
+    room.finishOrder = [];
+    room.result = null;
+    for (const p of room.players) p.hand = [];
+
+    toast(room, "Iemand disconnectte. Terug naar lobby.", "warn");
+    broadcast(room);
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});

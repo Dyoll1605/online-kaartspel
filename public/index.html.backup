@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Online Kaartspel</title>
+  <style>
+    :root{--bg:#0a1220;--panel:#101d30;--p2:#0c1626;--txt:#e8eef6;--muted:#8a9bb4;--bd:rgba(255,255,255,.10);--gr:#6ae4a6;--re:#ff6b6b;--r:14px}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh}
+    .layout{display:grid;grid-template-columns:340px 1fr;gap:14px;max-width:1160px;margin:0 auto;padding:14px}
+    @media(max-width:860px){.layout{grid-template-columns:1fr}}
+    .panel{background:var(--panel);border:1px solid var(--bd);border-radius:var(--r);padding:14px}
+    h1{font-size:19px;margin-bottom:8px}h2{font-size:13px;color:var(--muted);margin-bottom:8px}
+    .div{height:1px;background:var(--bd);margin:12px 0}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+    input,select{width:100%;padding:9px 11px;border-radius:10px;border:1px solid var(--bd);background:var(--p2);color:var(--txt);font:inherit;outline:none}
+    button{padding:9px 12px;border-radius:10px;border:1px solid var(--bd);background:rgba(255,255,255,.06);color:var(--txt);font:inherit;cursor:pointer;transition:background .1s}
+    button:hover{background:rgba(255,255,255,.12)}button:active{transform:translateY(1px)}button:disabled{opacity:.4;cursor:not-allowed}
+    button.gr{background:rgba(106,228,166,.18);border-color:rgba(106,228,166,.3)}
+    button.re{background:rgba(255,107,107,.18);border-color:rgba(255,107,107,.3)}
+    .row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}.row>*{flex:1;min-width:0}
+    .pill{display:inline-flex;gap:6px;align-items:center;padding:7px 10px;border:1px solid var(--bd);border-radius:999px;background:rgba(255,255,255,.04);font-size:12px;color:var(--muted)}
+    .tiny{font-size:12px;color:var(--muted)}
+    #playersList{display:flex;flex-direction:column;gap:7px}
+    .pRow{display:flex;justify-content:space-between;align-items:center;padding:9px 11px;border:1px solid var(--bd);border-radius:11px;background:rgba(255,255,255,.03)}
+    .pLeft{display:flex;align-items:center;gap:9px;min-width:0}
+    .avatar{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;font-size:17px;border:1px solid rgba(255,255,255,.12)}
+    .pName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pStatus{font-size:12px;color:var(--muted);flex-shrink:0}
+    .sbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--bd);border-radius:11px;background:rgba(255,255,255,.04)}
+    .table{border:1px solid var(--bd);border-radius:var(--r);background:radial-gradient(ellipse 600px 400px at 30% 30%,rgba(106,228,166,.08),transparent),rgba(255,255,255,.02);padding:14px;min-height:170px}
+    #pileLabel{font-size:12px;color:var(--muted);margin-bottom:10px}
+    #pileArea{display:flex;gap:10px;flex-wrap:wrap;min-height:90px;align-items:center}
+    .playCard,.handCard{width:60px;height:84px;border-radius:12px;border:1px solid rgba(255,255,255,.15);background:rgba(12,22,38,.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;user-select:none}
+    .playCard{box-shadow:0 8px 20px rgba(0,0,0,.3)}
+    .handCard{cursor:pointer;transition:transform .08s,outline .1s}
+    .handCard:hover{background:rgba(20,35,55,.95)}
+    .handCard.selected{transform:translateY(-6px);outline:2px solid rgba(106,228,166,.6)}
+    .cRank{font-weight:800;font-size:19px;line-height:1}.cSuit{font-size:13px;opacity:.75}
+    .playCard.red,.handCard.red{color:#f87171}
+    .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+    .handWrap{border:1px solid var(--bd);border-radius:var(--r);padding:12px;background:rgba(255,255,255,.02)}
+    #handArea{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    #endPanel{display:none;border:1px solid var(--bd);border-radius:var(--r);padding:14px;background:rgba(255,255,255,.03)}
+    #rankingEl{margin-top:8px;line-height:1.7}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <div class="panel">
+    <h1>Lobby 🎴</h1>
+    <p class="tiny">Host start bij 2+ spelers. Verliezer = laatste met kaarten.</p>
+    <div class="div"></div>
+    <label>Naam</label>
+    <input id="nameInput" maxlength="18" placeholder="Bijv. Lloyd" style="margin-bottom:10px" />
+    <div class="row">
+      <div><label>Emoji</label>
+        <select id="emojiSelect">
+          <option>🦊</option><option>🐼</option><option>🦁</option><option>🐸</option>
+          <option>🦉</option><option>🐙</option><option>🦄</option><option>🐺</option>
+          <option>🐝</option><option>🧠</option><option>🎧</option><option>🚀</option>
+        </select>
+      </div>
+      <div><label>Kleur</label>
+        <select id="colorSelect">
+          <option value="#6ae4a6">Mint</option><option value="#ffd166">Amber</option>
+          <option value="#7aa7ff">Blauw</option><option value="#ff6b6b">Rood</option>
+          <option value="#c77dff">Paars</option><option value="#f4a261">Oranje</option>
+        </select>
+      </div>
+    </div>
+    <div class="div"></div>
+    <button id="createBtn" class="gr" style="width:100%;margin-bottom:10px">+ Nieuwe kamer</button>
+    <div class="row" style="margin-bottom:10px">
+      <div><label>Kamercode</label><input id="roomInput" maxlength="6" placeholder="AB12" /></div>
+      <button id="joinBtn" style="flex:0 0 auto;align-self:flex-end">Join</button>
+    </div>
+    <div class="pill" id="roomPill" style="margin-bottom:10px">Nog niet in een kamer</div>
+    <div class="row" style="margin-bottom:10px">
+      <button id="startBtn" class="gr" disabled>Spel starten</button>
+      <button id="leaveBtn" class="re" disabled style="flex:0 0 auto">Verlaten</button>
+    </div>
+    <p class="tiny" id="lobbyHint" style="margin-bottom:12px">Maak of join een kamer.</p>
+    <div class="div"></div>
+    <h2>Spelers</h2>
+    <div id="playersList"></div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="sbar">
+      <div id="msgText" class="tiny">Klaar.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="pill" id="youPill">—</span>
+        <span class="pill" id="turnPill">Beurt: —</span>
+      </div>
+    </div>
+    <div class="table">
+      <h2>Tafel</h2>
+      <div id="pileLabel">Tafel leeg — startspeler opent de ronde.</div>
+      <div id="pileArea"></div>
+    </div>
+    <div class="controls">
+      <button id="playBtn" class="gr" disabled>Speel geselecteerde kaarten</button>
+      <button id="passBtn" disabled>Pas</button>
+      <span class="tiny" id="selectionInfo">Selecteer kaarten (gelijke waarde).</span>
+    </div>
+    <div class="handWrap">
+      <h2>Jouw hand</h2>
+      <div id="handArea"></div>
+    </div>
+    <div id="endPanel">
+      <h1 id="endTitle">Einde</h1>
+      <p class="tiny" id="endDetails"></p>
+      <div class="tiny" id="rankingEl"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="rematchBtn" class="gr" disabled>Nieuwe pot</button>
+        <button id="backLobbyBtn" class="re">Terug naar lobby</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/client.js"></script>
+</body>
+</html>

@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Kaartspel Lobby</title>
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --panel:#121a24;
+      --panel2:#0f1620;
+      --text:#e8eef6;
+      --muted:#9fb0c3;
+      --accent:#6ae4a6;
+      --danger:#ff6b6b;
+      --warn:#ffd166;
+      --ok:#6ae4a6;
+      --border:rgba(255,255,255,.08);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius:16px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: radial-gradient(1200px 800px at 30% 0%, rgba(106,228,166,.12), transparent 60%),
+                  radial-gradient(1000px 700px at 80% 20%, rgba(255,209,102,.10), transparent 55%),
+                  var(--bg);
+      color:var(--text);
+      min-height:100vh;
+      display:flex;
+      align-items:stretch;
+      justify-content:center;
+    }
+    .wrap{
+      width:min(1100px, 100%);
+      padding:16px;
+      display:flex;
+      gap:16px;
+    }
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.03), transparent 35%), var(--panel);
+      border:1px solid var(--border);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+    }
+    .sidebar{
+      width: min(360px, 100%);
+      padding:16px;
+    }
+    .main{
+      flex:1;
+      padding:16px;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      min-width: 0;
+    }
+    h1,h2,h3{margin:0 0 8px 0; letter-spacing:.2px}
+    h1{font-size:20px}
+    h2{font-size:16px; color:var(--muted)}
+    .row{display:flex; gap:10px; flex-wrap:wrap}
+    label{font-size:12px; color:var(--muted); display:block; margin-bottom:6px}
+    input, select, button{font:inherit}
+    input, select{
+      width:100%;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      background: var(--panel2);
+      color:var(--text);
+      outline:none;
+    }
+    button{
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color:var(--text);
+      padding:10px 12px;
+      border-radius:12px;
+      cursor:pointer;
+      transition: transform .04s ease, background .12s ease;
+      user-select:none;
+    }
+    button:hover{background: rgba(255,255,255,.10)}
+    button:active{transform: translateY(1px)}
+    button.primary{
+      background: rgba(106,228,166,.18);
+      border-color: rgba(106,228,166,.35);
+    }
+    button.primary:hover{background: rgba(106,228,166,.25)}
+    button.danger{
+      background: rgba(255,107,107,.18);
+      border-color: rgba(255,107,107,.35);
+    }
+    button:disabled{opacity:.45; cursor:not-allowed}
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color:var(--muted);
+      font-size:12px;
+    }
+    .tiny{font-size:12px; color:var(--muted)}
+    .hr{height:1px; background: var(--border); margin:12px 0}
+    .players{display:flex; flex-direction:column; gap:8px;}
+    .pRow{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.03);
+      min-width:0;
+    }
+    .pLeft{display:flex; align-items:center; gap:10px; min-width:0}
+    .avatar{
+      width:34px; height:34px;
+      border-radius: 12px;
+      display:grid;
+      place-items:center;
+      font-size:18px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+      flex:0 0 auto;
+    }
+    .pName{
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      font-size:14px;
+    }
+    .status{font-size:12px; color:var(--muted); flex:0 0 auto;}
+
+    .topbar{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+    .messageBar{
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+
+    .table{
+      border-radius: var(--radius);
+      border:1px solid var(--border);
+      background:
+        radial-gradient(800px 500px at 30% 20%, rgba(106,228,166,.10), transparent 60%),
+        radial-gradient(700px 500px at 80% 70%, rgba(255,209,102,.08), transparent 60%),
+        rgba(255,255,255,.02);
+      min-height: 320px;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      padding:14px;
+      position:relative;
+      overflow:hidden;
+    }
+    .centerPile{
+      flex:1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      flex-wrap:wrap;
+      padding:10px;
+    }
+    .cardMini{
+      width:54px;
+      height:72px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(15,22,32,.75);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex-direction:column;
+      box-shadow: 0 10px 20px rgba(0,0,0,.25);
+      position:relative;
+    }
+    .cardMini .v{font-weight:700; font-size:16px; line-height:1}
+    .cardMini .s{font-size:12px; opacity:.7}
+    .turnBadge{
+      position:absolute;
+      top:10px;
+      right:10px;
+      padding:6px 10px;
+      border-radius:999px;
+      background: rgba(106,228,166,.16);
+      border:1px solid rgba(106,228,166,.30);
+      font-size:12px;
+      color:var(--text);
+    }
+
+    .handWrap{
+      border-radius: var(--radius);
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.02);
+      padding:12px;
+    }
+    .hand{display:flex; gap:8px; flex-wrap:wrap;}
+    .hCard{
+      width:66px; height:90px;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(15,22,32,.85);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex-direction:column;
+      cursor:pointer;
+      user-select:none;
+      transition: transform .06s ease, outline .12s ease, background .12s ease;
+      outline: 2px solid transparent;
+    }
+    .hCard.selected{transform: translateY(-4px); outline:2px solid rgba(106,228,166,.55);}
+    .hCard .v{font-weight:800; font-size:18px; line-height:1}
+    .hCard .s{font-size:12px; opacity:.7}
+
+    .controls{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between;}
+    .btnRow{display:flex; gap:10px; flex-wrap:wrap;}
+
+    .modalBackdrop{
+      position:fixed; inset:0; background: rgba(0,0,0,.55);
+      display:none; align-items:center; justify-content:center; padding:16px; z-index:50;
+    }
+    .modal{
+      width:min(760px, 100%); padding:16px; border-radius: 18px; border:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,.04), transparent 45%), var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .modal .top{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+
+    .hidden{display:none !important}
+    @media (max-width: 900px){.wrap{flex-direction:column}.sidebar{width:100%}.table{min-height: 280px}}
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="sidebar card">
+      <div id="lobbyPanel">
+        <h1>Lobby 🎴</h1>
+        <p class="tiny">Maak een kamer of join met een code.</p>
+
+        <div class="hr"></div>
+
+        <div class="row" style="gap:12px">
+          <div style="flex:1; min-width:180px">
+            <label>Jouw naam</label>
+            <input id="nameInput" maxlength="18" placeholder="Bijv. Lloyd" />
+          </div>
+
+          <div style="width:110px">
+            <label>Emoji</label>
+            <select id="emojiSelect">
+              <option>🦊</option><option>🐼</option><option>🦁</option><option>🐸</option>
+              <option>🦉</option><option>🐙</option><option>🦄</option><option>🐺</option>
+              <option>🐝</option><option>🧠</option><option>🎧</option><option>🚀</option>
+            </select>
+          </div>
+
+          <div style="width:140px">
+            <label>Kleur</label>
+            <select id="colorSelect">
+              <option value="#6ae4a6">Mint</option>
+              <option value="#ffd166">Amber</option>
+              <option value="#7aa7ff">Blauw</option>
+              <option value="#ff6b6b">Rood</option>
+              <option value="#c77dff">Paars</option>
+              <option value="#f4a261">Oranje</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="row">
+          <button id="createBtn" class="primary" style="flex:1">Nieuwe kamer maken</button>
+        </div>
+
+        <div class="row">
+          <div style="flex:1; min-width:180px">
+            <label>Kamercode</label>
+            <input id="roomInput" maxlength="6" placeholder="Bijv. AB12" />
+          </div>
+          <button id="joinBtn" style="height:42px; align-self:end">Join</button>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="pill" id="roomPill">Nog niet in een kamer</div>
+
+        <div class="hr"></div>
+
+        <h2>Spelers</h2>
+        <div class="players" id="playersList"></div>
+
+        <div class="hr"></div>
+
+        <div class="row">
+          <button id="startBtn" class="primary" disabled style="flex:1">Spel starten</button>
+          <button id="leaveBtn" class="danger" disabled>Verlaten</button>
+        </div>
+
+        <p class="tiny" id="lobbyHint">Wachten op andere spelers…</p>
+      </div>
+
+      <div id="gameSidePanel" class="hidden">
+        <h1>Spelstatus</h1>
+        <div class="pill" id="gameRoomPill">Kamer: ?</div>
+        <div class="hr"></div>
+        <h2>Spelers</h2>
+        <div class="players" id="playersListGame"></div>
+        <div class="hr"></div>
+        <div class="row">
+          <button id="rulesBtn">? Regels</button>
+          <button id="menuBtn" class="danger">Stoppen / Menu</button>
+        </div>
+        <p class="tiny">Tip: tik kaarten aan om te selecteren.</p>
+      </div>
+    </div>
+
+    <div class="main card">
+      <div class="topbar">
+        <div>
+          <h1 id="screenTitle">Lobby</h1>
+          <div class="tiny" id="screenSub">Maak of join een kamer om te starten.</div>
+        </div>
+        <div class="row">
+          <span class="pill" id="youPill">Jij: -</span>
+          <span class="pill" id="turnPill">Beurt: -</span>
+        </div>
+      </div>
+
+      <div class="messageBar">
+        <div class="tiny" id="msgText">Klaar om te spelen.</div>
+        <div class="tiny" id="netText">Offline</div>
+      </div>
+
+      <div id="lobbyUIHelp">
+        <div class="table" style="align-items:center; justify-content:center; text-align:center;">
+          <div class="tiny">Maak een kamer of join met een code.</div>
+        </div>
+      </div>
+
+      <div id="gameUI" class="hidden">
+        <div class="table">
+          <div class="turnBadge" id="turnBadge">-</div>
+          <div class="centerPile" id="pileArea"></div>
+        </div>
+
+        <div class="controls">
+          <div class="btnRow">
+            <button id="playBtn" class="primary" disabled>Beurt eindigen (spelen)</button>
+            <button id="passBtn" disabled>Slag passeren</button>
+            <button id="drawBtn" disabled>Kaart trekken (n.v.t.)</button>
+          </div>
+          <div class="tiny" id="selectionInfo">Selecteer kaarten om te spelen.</div>
+        </div>
+
+        <div class="handWrap">
+          <h2>Jouw hand</h2>
+          <div class="hand" id="handArea"></div>
+        </div>
+
+        <div id="endPanel" class="hidden" style="padding:12px; border:1px solid var(--border); border-radius: var(--radius); background: rgba(255,255,255,.02)">
+          <h1 id="endTitle">Einde</h1>
+          <p class="tiny" id="endDetails"></p>
+          <div class="row">
+            <button id="rematchBtn" class="primary" disabled>Nieuwe ronde</button>
+            <button id="backLobbyBtn" class="danger">Terug naar lobby</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modalBackdrop" id="modalBackdrop">
+    <div class="modal">
+      <div class="top">
+        <h2>Regels</h2>
+        <button id="closeRulesBtn">Sluiten</button>
+      </div>
+      <div class="hr"></div>
+      <ol>
+        <li>Doel: als eerste al je kaarten wegspelen.</li>
+        <li>Rangorde: <b>3 &gt; 2 &gt; A &gt; K &gt; Q &gt; J &gt; 10 &gt; 9 &gt; 8 &gt; 7 &gt; 6 &gt; 5 &gt; 4</b>.</li>
+        <li>Per beurt: passen of een set gelijke kaarten.</li>
+        <li>Volgen: exact zelfde aantal kaarten, hogere waarde.</li>
+        <li><b>3</b>: meteen slag winnen en zelf opnieuw starten.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="./client.js"></script>
+</body>
+</html>
