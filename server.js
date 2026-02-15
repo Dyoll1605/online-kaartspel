@@ -154,23 +154,29 @@ function markDone(room,pid){
   }
 }
 function checkEnd(room){
-  const still=room.players.filter(p=>p.hand.length>0&&!p.isGhost);
-  if(still.length>1) return false;
-  const loser=still[0]||null;
-  const ranking=room.finishOrder.filter(id=>id!==GHOST_ID).slice();
-  if(loser&&!ranking.includes(loser.id)) ranking.push(loser.id);
-  // Zorg dat alle echte spelers in de ranking zitten
-  for(const p of room.players){
-    if(!p.isGhost && !ranking.includes(p.id)) ranking.push(p.id);
+  const realPlayers = room.players.filter(p=>!p.isGhost);
+  const stillHaveCards = realPlayers.filter(p=>p.hand.length>0);
+  // Spel eindigt als max 1 echte speler nog kaarten heeft
+  if(stillHaveCards.length > 1) return false;
+
+  const loser = stillHaveCards[0] || null; // degene die nog kaarten heeft = verliezer
+  // Bouw ranking: finishOrder (wie als eerst klaar was) + loser achteraan
+  const ranking = room.finishOrder.filter(id=>id!==GHOST_ID).slice();
+  if(loser && !ranking.includes(loser.id)) ranking.push(loser.id);
+  // Voeg eventuele ontbrekende echte spelers toe
+  for(const p of realPlayers){
+    if(!ranking.includes(p.id)) ranking.push(p.id);
   }
-  room.result={
+  room.result = {
     loserId:  loser ? loser.id : null,
     winnerId: ranking[0] || null,
-    ranking: ranking.map(id=>{
-      const pl=room.players.find(x=>x.id===id);
+    ranking:  ranking.map(id=>{
+      const pl = room.players.find(x=>x.id===id);
       return pl ? pub(pl) : {id,name:"?",emoji:"🎴",color:"#999",cardCount:0,isGhost:false};
     }),
   };
+  room.phase = "ended";
+  toast(room, loser ? "Spel klaar! Verliezer: "+loser.name : "Spel klaar!", "warn");
   return true;
 }
 function endRound(room,winnerId){
