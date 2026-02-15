@@ -156,7 +156,7 @@ function renderSwap(swapState){
 
 // ── Modus-selectie ────────────────────────────────────────────────
 function renderModeSelect(options){
-  if(!options||state.phase!=="modeSelect"){ modePanel.style.display="none"; return; }
+  if(state.phase!=="modeSelect"){ modePanel.style.display="none"; return; }
   modePanel.style.display="block";
   const isWinner=state.result&&state.you&&state.you.id===state.result.winnerId;
   const winner=state.players.find(p=>p.id===(state.result&&state.result.winnerId));
@@ -164,7 +164,7 @@ function renderModeSelect(options){
     ?"Jij wint! Kies welke variant jullie het volgende potje spelen:"
     :"Wachten op "+(winner?winner.name:"de winnaar")+"...";
   modeBtns.innerHTML="";
-  if(!isWinner) return;
+  if(!isWinner||!options) return;
   for(const opt of options){
     const info=MODE_INFO[opt.key]||{label:opt.label,icon:opt.icon,desc:""};
     const btn=document.createElement("button");
@@ -226,7 +226,8 @@ function selSummary(){
 }
 function updateButtons(){
   selectionInfo.textContent=selSummary();
-  const yourTurn=state.phase==="playing"&&state.you&&state.turnPlayerId===state.you.id;
+  const inGame=state.phase==="playing";
+  const yourTurn=inGame&&state.you&&state.turnPlayerId===state.you.id;
   playBtn.disabled=!yourTurn||!selected.length;
   passBtn.disabled=!yourTurn;
   const realCount=state.players.filter(p=>!p.isGhost).length;

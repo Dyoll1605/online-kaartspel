@@ -413,6 +413,8 @@ function startSwapPhase(room){
 function startModeSelect(room){
   room.phase="modeSelect";
   room.swapState=null;
+  room.round=null;          // leeg de ronde zodat turnPlayerId null wordt
+  room.turnIndex=0;
   const winner=room.players.find(p=>p.id===(room.result&&room.result.winnerId));
   toast(room,(winner?winner.name:"Winnaar")+" kiest de volgende spelvariant.","info");
   bcast(room);
