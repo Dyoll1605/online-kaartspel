@@ -15,6 +15,7 @@ const lobbyHint     = $("lobbyHint");
 const msgText       = $("msgText");
 const turnPill      = $("turnPill");
 const youPill       = $("youPill");
+const modeBadge     = $("modeBadge");
 const pileArea      = $("pileArea");
 const pileLabel     = $("pileLabel");
 const handArea      = $("handArea");
@@ -25,22 +26,34 @@ const endPanel      = $("endPanel");
 const endTitle      = $("endTitle");
 const endDetails    = $("endDetails");
 const rankingEl     = $("rankingEl");
-const rematchBtn    = $("rematchBtn");
 const backLobbyBtn  = $("backLobbyBtn");
 const actLogEl      = $("actLog");
 const actEmpty      = $("actEmpty");
+const swapPanel     = $("swapPanel");
+const swapDesc      = $("swapDesc");
+const swapDetails   = $("swapDetails");
+const modePanel     = $("modePanel");
+const modeDesc      = $("modeDesc");
+const modeBtns      = $("modeBtns");
+
+const MODE_INFO = {
+  traditioneel:  {label:"Traditioneel",  icon:"🃏", desc:"Speel hoger of pas. Laatste met kaarten verliest."},
+  aanleggen:     {label:"Aanleggen",      icon:"📥", desc:"Leg extra kaarten van dezelfde waarde aan of speel hoger."},
+  kleurbekennen: {label:"Kleur bekennen", icon:"🎨", desc:"Aanleggen + kleurplicht: volg de kleurverdeling op tafel."},
+};
 
 let state = {
-  you:null, roomCode:null, hostId:null, phase:"lobby",
+  you:null, roomCode:null, hostId:null, phase:"lobby", gameMode:"traditioneel",
   players:[], hand:[], pile:null, turnPlayerId:null,
-  actLog:[], result:null
+  actLog:[], result:null, swapState:null, modeOptions:null,
 };
 let selected = [];
-const shownActIds = new Set();   // voorkomt dubbel renderen van log-items
+const shownActIds = new Set();
 
-// ── Helpers ───────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────
 function profile(){
-  return{name:(nameInput.value||"").trim().slice(0,18)||"Speler",emoji:emojiSelect.value,color:colorSelect.value};
+  return{name:(nameInput.value||"").trim().slice(0,18)||"Speler",
+         emoji:emojiSelect.value,color:colorSelect.value};
 }
 function msg(text,kind){
   msgText.textContent=text;
@@ -53,8 +66,15 @@ function makeCard(rank,suit,mini){
   el.innerHTML=`<span class="cRank">${rank}</span><span class="cSuit">${suit}</span>`;
   return el;
 }
+function makeHandCard(c, isSelected){
+  const el=document.createElement("div");
+  el.className="handCard"+(isSelected?" selected":"");
+  if(c.suit==="♥"||c.suit==="♦") el.classList.add("red");
+  el.innerHTML=`<span class="cRank">${c.rank}</span><span class="cSuit">${c.suit}</span>`;
+  return el;
+}
 
-// ── Spelerlijst ───────────────────────────────────────────
+// ── Spelerlijst ──────────────────────────────────────────────────
 function renderPlayers(){
   playersList.innerHTML="";
   for(const p of state.players){
@@ -69,8 +89,8 @@ function renderPlayers(){
     av.style.background =(p.color||"#6ae4a6")+"22";
     const nm=document.createElement("div");   nm.className="pName";
     let label=p.isGhost?"🤖 Computer (past altijd)":p.name;
-    if(!p.isGhost&&p.id===state.hostId)              label+=" (host)";
-    if(!p.isGhost&&p.id===(state.you&&state.you.id)) label+=" ←";
+    if(!p.isGhost&&p.id===state.hostId)               label+=" (host)";
+    if(!p.isGhost&&p.id===(state.you&&state.you.id))  label+=" ←";
     nm.textContent=label;
     left.append(av,nm);
     const right=document.createElement("div"); right.className="pStatus";
@@ -83,26 +103,23 @@ function renderPlayers(){
   }
 }
 
-// ── Tafel ─────────────────────────────────────────────────
+// ── Tafel ────────────────────────────────────────────────────────
 function renderPile(){
   pileArea.innerHTML="";
   if(!state.pile){
     pileLabel.textContent="Tafel leeg — startspeler opent de ronde.";
     return;
   }
-  pileLabel.textContent="Op tafel: "+state.pile.count+"x "+state.pile.rank;
+  pileLabel.textContent="Op tafel: "+state.pile.count+"× "+state.pile.rank;
   for(const c of (state.pile.cardsShown||[])) pileArea.appendChild(makeCard(c.rank,c.suit,false));
 }
 
-// ── Hand ──────────────────────────────────────────────────
+// ── Hand ─────────────────────────────────────────────────────────
 function renderHand(){
   handArea.innerHTML="";
   const sorted=state.hand.slice().sort((a,b)=>(b.sort-a.sort)||a.suit.localeCompare(b.suit));
   for(const c of sorted){
-    const el=document.createElement("div");
-    el.className="handCard"+(selected.includes(c.id)?" selected":"");
-    if(c.suit==="♥"||c.suit==="♦") el.classList.add("red");
-    el.innerHTML=`<span class="cRank">${c.rank}</span><span class="cSuit">${c.suit}</span>`;
+    const el=makeHandCard(c,selected.includes(c.id));
     el.onclick=()=>{
       const i=selected.indexOf(c.id);
       if(i!==-1) selected.splice(i,1); else selected.push(c.id);
@@ -112,46 +129,86 @@ function renderHand(){
   }
 }
 
-// ── Activiteitenlog ───────────────────────────────────────
+// ── Swap-fase ────────────────────────────────────────────────────
+function renderSwap(swapState){
+  if(!swapState||!swapState.done){ swapPanel.style.display="none"; return; }
+  swapPanel.style.display="block";
+  const winner=state.players.find(p=>p.id===swapState.winnerId);
+  const loser =state.players.find(p=>p.id===swapState.loserId);
+  swapDesc.textContent=
+    (winner?winner.name:"Winnaar")+" geeft "+swapState.winnerGives.length+"× laagste aan "+
+    (loser?loser.name:"Verliezer")+
+    " · "+(loser?loser.name:"Verliezer")+" geeft "+swapState.loserGives.length+"× hoogste aan "+
+    (winner?winner.name:"Winnaar");
+  swapDetails.innerHTML="";
+
+  function makeSwapBox(title,cards){
+    const box=document.createElement("div"); box.className="swap-box";
+    const h=document.createElement("h2"); h.textContent=title;
+    const row=document.createElement("div"); row.className="swap-cards";
+    for(const c of cards) row.appendChild(makeCard(c.rank,c.suit,false));
+    box.append(h,row);
+    return box;
+  }
+  swapDetails.appendChild(makeSwapBox((winner?winner.name:"Winnaar")+" geeft laagste:",swapState.winnerGives));
+  swapDetails.appendChild(makeSwapBox((loser?loser.name:"Verliezer")+" geeft hoogste:",swapState.loserGives));
+}
+
+// ── Modus-selectie ────────────────────────────────────────────────
+function renderModeSelect(options){
+  if(!options||state.phase!=="modeSelect"){ modePanel.style.display="none"; return; }
+  modePanel.style.display="block";
+  const isWinner=state.result&&state.you&&state.you.id===state.result.winnerId;
+  const winner=state.players.find(p=>p.id===(state.result&&state.result.winnerId));
+  modeDesc.textContent=isWinner
+    ?"Jij wint! Kies welke variant jullie het volgende potje spelen:"
+    :"Wachten op "+(winner?winner.name:"de winnaar")+"...";
+  modeBtns.innerHTML="";
+  if(!isWinner) return;
+  for(const opt of options){
+    const info=MODE_INFO[opt.key]||{label:opt.label,icon:opt.icon,desc:""};
+    const btn=document.createElement("button");
+    btn.className="mode-btn";
+    btn.innerHTML=`<span class="mode-icon">${info.icon}</span><span class="mode-name">${info.label}</span><span class="mode-desc">${info.desc}</span>`;
+    btn.onclick=()=>{
+      socket.emit("selectMode",{mode:opt.key},res=>{
+        if(!res||!res.ok) msg(res&&res.error,"error");
+      });
+    };
+    modeBtns.appendChild(btn);
+  }
+}
+
+// ── Activiteitenlog ───────────────────────────────────────────────
 function renderActLog(){
   const items=state.actLog||[];
   actEmpty.style.display=items.length?"none":"block";
-
   for(const act of items){
     if(shownActIds.has(act.id)) continue;
     shownActIds.add(act.id);
-
     const el=document.createElement("div");
-    el.className="act-item type-"+act.type;
-
-    // Avatar
+    const typeClass=act.isAppend?"append":act.type;
+    el.className="act-item type-"+typeClass;
     const av=document.createElement("div"); av.className="act-avatar";
     av.textContent=act.emoji||"🎴";
     av.style.background=(act.color||"#556070")+"30";
     av.style.borderColor=(act.color||"#556070")+"60";
-
-    // Body
     const body=document.createElement("div"); body.className="act-body";
     const nm=document.createElement("div");   nm.className="act-name";
     nm.textContent=act.playerName;
     const desc=document.createElement("div"); desc.className="act-desc";
-    if(act.type==="play")  desc.textContent="speelde "+act.count+"× "+act.rank;
+    if(act.type==="play")
+      desc.textContent=(act.isAppend?"legde aan: ":"speelde ")+act.count+"× "+act.rank;
     else if(act.type==="pass") desc.textContent="paste";
     else if(act.type==="win")  desc.textContent="🏆 wint de ronde!";
     body.append(nm,desc);
-
-    // Mini-kaartjes tonen bij 'play'
     if(act.type==="play"&&act.cards&&act.cards.length){
-      const cardRow=document.createElement("div"); cardRow.className="act-cards";
-      for(const c of act.cards) cardRow.appendChild(makeCard(c.rank,c.suit,true));
-      body.appendChild(cardRow);
+      const cr=document.createElement("div"); cr.className="act-cards";
+      for(const c of act.cards) cr.appendChild(makeCard(c.rank,c.suit,true));
+      body.appendChild(cr);
     }
-
     el.append(av,body);
-    // Nieuwste bovenaan
     actLogEl.insertBefore(el,actLogEl.firstChild);
-
-    // Fade na 4 seconden
     setTimeout(()=>{
       el.classList.add("fading");
       setTimeout(()=>{ if(el.parentNode) el.remove(); },600);
@@ -159,7 +216,7 @@ function renderActLog(){
   }
 }
 
-// ── Knoppen & pills ───────────────────────────────────────
+// ── Knoppen & pills ───────────────────────────────────────────────
 function selSummary(){
   const cards=state.hand.filter(c=>selected.includes(c.id));
   if(!cards.length) return "Selecteer kaarten (gelijke waarde).";
@@ -179,56 +236,64 @@ function updateButtons(){
   turnPill.textContent="Beurt: "+(turnP?turnP.name:"—");
   youPill.textContent =state.you?state.you.emoji+" "+state.you.name:"—";
   roomPill.textContent=state.roomCode?"Kamer: "+state.roomCode:"Nog niet in een kamer";
+  // Mode badge
+  const mi=MODE_INFO[state.gameMode];
+  if(mi&&state.phase==="playing"){
+    modeBadge.style.display="inline-flex";
+    modeBadge.textContent=mi.icon+" "+mi.label;
+  } else { modeBadge.style.display="none"; }
   if(!state.roomCode)                              lobbyHint.textContent="Maak of join een kamer.";
   else if(realCount<2)                             lobbyHint.textContent="Wacht op meer spelers (min 2).";
   else if(state.you&&state.you.id===state.hostId)  lobbyHint.textContent="Je bent host — start het spel!";
   else                                             lobbyHint.textContent="Wachten tot host start...";
 }
 
-// ── Eindscherm ────────────────────────────────────────────
-function showEnd(result){
-  endPanel.style.display="block";
-  const loser=result&&result.ranking?result.ranking.find(p=>p.id===result.loserId):null;
-  endTitle.textContent   =loser?"Verliezer: "+loser.name+" 💀":"Spel klaar!";
-  endDetails.textContent ="Iedereen behalve de verliezer heeft zijn kaarten weggespeeld.";
-  rankingEl.innerHTML="";
-  if(result&&result.ranking){
-    result.ranking.forEach((p,i)=>{
-      const line=document.createElement("div");
-      line.textContent=(i+1)+". "+(p.emoji||"🎴")+" "+p.name+(p.id===result.loserId?" ← verliezer":"");
-      rankingEl.appendChild(line);
-    });
+// ── Eindscherm ────────────────────────────────────────────────────
+function renderEnd(result){
+  if(!result||state.phase==="playing"||state.phase==="swap"||state.phase==="modeSelect"){
+    endPanel.style.display="none"; return;
   }
-  rematchBtn.disabled=!(state.you&&state.you.id===state.hostId);
+  // Eindscherm toont ranking maar daarna volgt swap/modeSelect — toon het dus niet apart
+  endPanel.style.display="none";
 }
 
-// ── Hoofd-update ──────────────────────────────────────────
+// ── Hoofd-update ──────────────────────────────────────────────────
 function applySnap(snap){
   state.roomCode    =snap.roomCode;
   state.phase       =snap.phase;
   state.hostId      =snap.hostId;
+  state.gameMode    =snap.gameMode||"traditioneel";
   state.players     =snap.players||[];
   state.turnPlayerId=snap.turnPlayerId;
   state.hand        =snap.hand||[];
   state.pile        =snap.pile;
   state.actLog      =snap.actLog||[];
   state.result      =snap.result;
+  state.swapState   =snap.swapState;
+  state.modeOptions =snap.modeOptions;
+
   renderPlayers();
   renderPile();
   renderHand();
   renderActLog();
   updateButtons();
-  if(state.phase==="ended"&&state.result) showEnd(state.result);
-  else endPanel.style.display="none";
+
+  // Panels tonen op basis van fase
+  swapPanel.style.display   = state.phase==="swap"       ? "block" : "none";
+  modePanel.style.display   = state.phase==="modeSelect" ? "block" : "none";
+  endPanel.style.display    = "none";
+
+  if(state.phase==="swap")        renderSwap(state.swapState);
+  if(state.phase==="modeSelect")  renderModeSelect(state.modeOptions);
 }
 
-// ── URL ?room=XXXX ────────────────────────────────────────
+// ── URL ?room=XXXX ────────────────────────────────────────────────
 (()=>{
   const r=new URLSearchParams(location.search).get("room");
   if(r) roomInput.value=r.toUpperCase();
 })();
 
-// ── Button handlers ───────────────────────────────────────
+// ── Event handlers ────────────────────────────────────────────────
 createBtn.onclick=()=>{
   socket.emit("createRoom",profile(),res=>{
     if(!res||!res.ok) return msg((res&&res.error)||"Kon kamer niet maken.","error");
@@ -251,10 +316,13 @@ joinBtn.onclick=()=>{
 startBtn.onclick  =()=>socket.emit("startGame",  {},res=>{if(!res||!res.ok) msg(res&&res.error,"error");});
 leaveBtn.onclick  =()=>{
   socket.emit("leaveRoom",{},()=>{
-    state={you:null,roomCode:null,hostId:null,phase:"lobby",players:[],hand:[],pile:null,turnPlayerId:null,actLog:[],result:null};
+    state={you:null,roomCode:null,hostId:null,phase:"lobby",gameMode:"traditioneel",
+           players:[],hand:[],pile:null,turnPlayerId:null,actLog:[],result:null,
+           swapState:null,modeOptions:null};
     selected=[];shownActIds.clear();
     renderPlayers();renderPile();renderHand();
     actLogEl.innerHTML="";actEmpty.style.display="block";
+    swapPanel.style.display="none";modePanel.style.display="none";endPanel.style.display="none";
     updateButtons();msg("Je hebt de kamer verlaten.","info");
   });
 };
@@ -266,7 +334,6 @@ playBtn.onclick=()=>{
   });
 };
 passBtn.onclick     =()=>socket.emit("pass",       {},res=>{if(!res||!res.ok) msg(res&&res.error,"error");});
-rematchBtn.onclick  =()=>socket.emit("rematch",    {},res=>{if(!res||!res.ok) msg(res&&res.error,"error");});
 backLobbyBtn.onclick=()=>socket.emit("backToLobby",{},()=>{});
 
 socket.on("connect",   ()=>msg("Verbonden.","ok"));
