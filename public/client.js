@@ -29,9 +29,8 @@ const rankingEl     = $("rankingEl");
 const backLobbyBtn  = $("backLobbyBtn");
 const actLogEl      = $("actLog");
 const actEmpty      = $("actEmpty");
+const swapOverlay   = $("swapOverlay");
 const swapPanel     = $("swapPanel");
-const swapDesc      = $("swapDesc");
-const swapDetails   = $("swapDetails");
 const modePanel     = $("modePanel");
 const modeDesc      = $("modeDesc");
 const modeBtns      = $("modeBtns");
@@ -131,40 +130,94 @@ function renderHand(){
 
 // ── Swap-fase ────────────────────────────────────────────────────
 function renderSwap(swapState){
-  if(!swapState||!swapState.done){ swapPanel.style.display="none"; return; }
-  swapPanel.style.display="block";
-  const winner=state.players.find(p=>p.id===swapState.winnerId);
-  const loser =state.players.find(p=>p.id===swapState.loserId);
-  swapDesc.textContent=
-    (winner?winner.name:"Winnaar")+" geeft "+swapState.winnerGives.length+"× laagste aan "+
-    (loser?loser.name:"Verliezer")+
-    " · "+(loser?loser.name:"Verliezer")+" geeft "+swapState.loserGives.length+"× hoogste aan "+
-    (winner?winner.name:"Winnaar");
-  swapDetails.innerHTML="";
+  console.log("renderSwap called:", swapState);
+  if(!swapState){ swapOverlay.className=""; return; }
 
-  function makeSwapBox(title,cards){
-    const box=document.createElement("div"); box.className="swap-box";
-    const h=document.createElement("h2"); h.textContent=title;
-    const row=document.createElement("div"); row.className="swap-cards";
-    for(const c of cards) row.appendChild(makeCard(c.rank,c.suit,false));
-    box.append(h,row);
+  const wName  = swapState.winnerName  || "Winnaar";
+  const wEmoji = swapState.winnerEmoji || "🏆";
+  const lName  = swapState.loserName   || "Verliezer";
+  const lEmoji = swapState.loserEmoji  || "💀";
+  const sLeft  = swapState.secondsLeft != null ? swapState.secondsLeft : 10;
+
+  // Bouw de popup opnieuw op
+  swapPanel.innerHTML = "";
+
+  // Header
+  const header = document.createElement("div");
+  header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:14px";
+  const title = document.createElement("div");
+  title.innerHTML = "<h1 style='color:#ffd166;font-size:20px'>🔄 Kaartruil</h1>";
+  const timer = document.createElement("div");
+  timer.style.cssText = "font-size:28px;font-weight:800;color:#ffd166;min-width:32px;text-align:right";
+  timer.textContent = sLeft;
+  header.append(title, timer);
+  swapPanel.appendChild(header);
+
+  // Uitleg
+  const uitleg = document.createElement("p");
+  uitleg.style.cssText = "font-size:12px;color:#8a9bb4;margin-bottom:16px;line-height:1.5";
+  uitleg.textContent =
+    lEmoji+" "+lName+" (verliezer) geeft zijn 2 hoogste kaarten aan "+wName+
+    ". "+wEmoji+" "+wName+" (winnaar) geeft zijn 2 laagste kaarten aan "+lName+".";
+  swapPanel.appendChild(uitleg);
+
+  // Twee ruil-blokken
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:12px;flex-wrap:wrap";
+
+  function makeSwapBlock(fromEmoji, fromName, toEmoji, toName, label, cards){
+    const box = document.createElement("div");
+    box.style.cssText = "flex:1;min-width:140px;padding:12px;border:1px solid rgba(255,213,102,.25);border-radius:12px;background:rgba(255,213,102,.07)";
+
+    const lbl = document.createElement("div");
+    lbl.style.cssText = "font-size:11px;color:#8a9bb4;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em";
+    lbl.textContent = label;
+
+    const who = document.createElement("div");
+    who.style.cssText = "font-size:13px;font-weight:700;margin-bottom:10px;color:#e8eef6";
+    who.textContent = fromEmoji+" "+fromName+" → "+toEmoji+" "+toName;
+
+    const cardRow = document.createElement("div");
+    cardRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
+    for(const c of (cards||[])) cardRow.appendChild(makeCard(c.rank, c.suit, false));
+    if(!cards||!cards.length){
+      const none = document.createElement("span");
+      none.style.cssText = "font-size:12px;color:#556070";
+      none.textContent = "—";
+      cardRow.appendChild(none);
+    }
+    box.append(lbl, who, cardRow);
     return box;
   }
-  swapDetails.appendChild(makeSwapBox((winner?winner.name:"Winnaar")+" geeft laagste:",swapState.winnerGives));
-  swapDetails.appendChild(makeSwapBox((loser?loser.name:"Verliezer")+" geeft hoogste:",swapState.loserGives));
+
+  // Verliezer geeft 2 hoogste aan winnaar (eerst tonen)
+  row.appendChild(makeSwapBlock(
+    lEmoji, lName, wEmoji, wName,
+    "Verliezer geeft 2 hoogste aan winnaar",
+    swapState.loserGives
+  ));
+
+  // Winnaar geeft 2 laagste aan verliezer
+  row.appendChild(makeSwapBlock(
+    wEmoji, wName, lEmoji, lName,
+    "Winnaar geeft 2 laagste aan verliezer",
+    swapState.winnerGives
+  ));
+
+  swapPanel.appendChild(row);
 }
 
 // ── Modus-selectie ────────────────────────────────────────────────
 function renderModeSelect(options){
   if(state.phase!=="modeSelect"){ modePanel.style.display="none"; return; }
   modePanel.style.display="block";
-  const isWinner=state.result&&state.you&&state.you.id===state.result.winnerId;
-  const winner=state.players.find(p=>p.id===(state.result&&state.result.winnerId));
-  modeDesc.textContent=isWinner
-    ?"Jij wint! Kies welke variant jullie het volgende potje spelen:"
-    :"Wachten op "+(winner?winner.name:"de winnaar")+"...";
+  const isLoser=state.result&&state.you&&state.you.id===state.result.loserId;
+  const loser=state.players.find(p=>p.id===(state.result&&state.result.loserId));
+  modeDesc.textContent=isLoser
+    ?"Jij verliest — maar jij mag de volgende variant kiezen!"
+    :"Wachten op "+(loser?loser.name:"de verliezer")+"...";
   modeBtns.innerHTML="";
-  if(!isWinner||!options) return;
+  if(!isLoser||!options) return;
   for(const opt of options){
     const info=MODE_INFO[opt.key]||{label:opt.label,icon:opt.icon,desc:""};
     const btn=document.createElement("button");
@@ -280,11 +333,16 @@ function applySnap(snap){
   updateButtons();
 
   // Panels tonen op basis van fase
-  swapPanel.style.display   = state.phase==="swap"       ? "block" : "none";
+  // Toon swap overlay als phase = swap
+  if(state.phase==="swap"){
+    swapOverlay.className = "active";
+    renderSwap(state.swapState);
+  } else {
+    swapOverlay.className = "";
+  }
+  
   modePanel.style.display   = state.phase==="modeSelect" ? "block" : "none";
   endPanel.style.display    = "none";
-
-  if(state.phase==="swap")        renderSwap(state.swapState);
   if(state.phase==="modeSelect")  renderModeSelect(state.modeOptions);
 }
 
@@ -323,7 +381,7 @@ leaveBtn.onclick  =()=>{
     selected=[];shownActIds.clear();
     renderPlayers();renderPile();renderHand();
     actLogEl.innerHTML="";actEmpty.style.display="block";
-    swapPanel.style.display="none";modePanel.style.display="none";endPanel.style.display="none";
+    swapOverlay.className="";modePanel.style.display="none";endPanel.style.display="none";
     updateButtons();msg("Je hebt de kamer verlaten.","info");
   });
 };

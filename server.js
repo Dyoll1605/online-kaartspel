@@ -189,7 +189,8 @@ function endRound(room,winnerId){
     room.round.pile=null;
     bcast(room);
     if(checkEnd(room)){
-      startSwapPhase(room);
+      // Spel klaar: verliezer kiest eerst de variant
+      setTimeout(function(){ startModeSelect(room); bcast(room); },500);
       return;
     }
     setTimeout(function(){ startRound(room,winnerId); bcast(room); },200);
@@ -238,16 +239,25 @@ function validateAanleggen(room,player,cardIds){
   if(play.isThree) return{ok:true,play};
   const pile=room.round.pile;
   if(!pile) return{ok:true,play}; // opener: vrij
+  
   // Optie 1: hoger spelen (zelfde aantal)
-  if(play.count===pile.count && RSORT[rank]>RSORT[pile.rank]) return{ok:true,play};
+  if(play.count===pile.count && RSORT[rank]>RSORT[pile.rank]){
+    // Markeer dat er verhoogd is (aanleggen niet meer toegestaan)
+    return{ok:true,play:{...play,wasRaised:true}};
+  }
+  
   // Optie 2: aanleggen (zelfde rank als pile, 1 of meer)
+  // MAAR: als laatste actie verhogen was, mag je niet meer aanleggen
   if(rank===pile.rank){
-    // Bouw gecombineerde pile
+    if(pile.wasRaised){
+      return{ok:false,error:"Na verhogen mag je niet meer aanleggen. Speel hoger."};
+    }
     const combined={
       rank: pile.rank,
       count: pile.count+play.count,
       cardsShown: [...pile.cardsShown,...play.cardsShown],
       lastPlayedBy: player.id,
+      wasRaised: false, // aanleggen reset de vlag niet
     };
     return{ok:true,play:{...play,isAppend:true,combinedPile:combined}};
   }
@@ -262,34 +272,32 @@ function validateKleurbekennen(room,player,cardIds){
   const rank=cards[0].rank;
   for(const c of cards) if(c.rank!==rank) return{ok:false,error:"Alle kaarten moeten dezelfde waarde hebben."};
   const play=buildPlay(cards);
-  // 3 wint altijd ongeacht kleur
   if(play.isThree) return{ok:true,play};
   const pile=room.round.pile;
   if(!pile) return{ok:true,play}; // opener: vrij
-  // Bepaal vereiste kleurpatroon van pile
-  const pileColors=pile.cardsShown.map(c=>c.color); // ["red","black",...]
+  
+  const pileColors=pile.cardsShown.map(c=>c.color);
+  
   // Optie 1: hoger spelen — moet zelfde kleurpatroon hebben
   if(play.count===pile.count && RSORT[rank]>RSORT[pile.rank]){
     const playColors=play.cardsShown.map(c=>c.color);
     const pRed=pileColors.filter(c=>c==="red").length;
     const plRed=playColors.filter(c=>c==="red").length;
     if(pRed!==plRed) return{ok:false,error:"Verkeerde kleurverdeling. Nodig: "+pRed+" rood, "+(pile.count-pRed)+" zwart."};
-    return{ok:true,play};
+    return{ok:true,play:{...play,wasRaised:true}};
   }
-  // Optie 2: aanleggen — zelfde rank + aanlegkaart(en) moeten juiste kleur hebben
+  
+  // Optie 2: aanleggen — zelfde rank
+  // MAAR: als laatste actie verhogen was, mag je niet meer aanleggen
   if(rank===pile.rank){
-    // Elke aanlegkaart moet rood zijn als de pile-kaarten rood zijn, etc.
-    // We checken of de nieuwe kaarten passen bij de kleurverdeling
-    const pRed=pileColors.filter(c=>c==="red").length;
-    const pBlack=pile.count-pRed;
-    const addRed=play.cardsShown.filter(c=>c.color==="red").length;
-    const addBlack=play.count-addRed;
-    // aanleggen: verhouding mag uitgebreid worden zolang nieuwe kaarten alleen rood of alleen zwart toevoegen
-    // simpelste regel: aanlegkaarten mogen elke kleur zijn (je legt immers aan op dezelfde waarde)
+    if(pile.wasRaised){
+      return{ok:false,error:"Na verhogen mag je niet meer aanleggen. Speel hoger met juiste kleur."};
+    }
     const combined={
       rank:pile.rank, count:pile.count+play.count,
       cardsShown:[...pile.cardsShown,...play.cardsShown],
       lastPlayedBy:player.id,
+      wasRaised:false,
     };
     return{ok:true,play:{...play,isAppend:true,combinedPile:combined}};
   }
@@ -307,8 +315,13 @@ function applyPlay(room,player,cardIds,play){
   if(play.isAppend && play.combinedPile){
     room.round.pile=play.combinedPile;
   } else {
-    room.round.pile={rank:play.rank,count:play.count,
-                     cardsShown:play.cardsShown,lastPlayedBy:player.id};
+    room.round.pile={
+      rank:play.rank,
+      count:play.count,
+      cardsShown:play.cardsShown,
+      lastPlayedBy:player.id,
+      wasRaised: play.wasRaised || false, // verhogen = true, anders false
+    };
   }
 }
 
@@ -340,78 +353,6 @@ function afterAction(room){
   }
 }
 
-// ════════════════════════════════════════════════════════════════
-// KAARTRUIL (swap-fase tussen potjes)
-// ════════════════════════════════════════════════════════════════
-// Winnaar geeft zijn 2 LAAGSTE kaarten aan verliezer
-// Verliezer geeft zijn 2 HOOGSTE kaarten aan winnaar
-// Bij 1 kaart: geef die ene. Bij 0: niets.
-
-function startSwapPhase(room){
-  const result=room.result;
-  // Geen ruil mogelijk als er geen echte winnaar én verliezer zijn
-  if(!result || !result.winnerId || !result.loserId){
-    startModeSelect(room);
-    return;
-  }
-  const winner=room.players.find(p=>p.id===result.winnerId);
-  const loser =room.players.find(p=>p.id===result.loserId);
-
-  // Ghost doet niet mee aan ruil, of als een van beiden niet gevonden
-  if(!winner||!loser||winner.isGhost||loser.isGhost){
-    startModeSelect(room);
-    return;
-  }
-
-  // Bepaal te ruilen kaarten
-  const wSorted=[...winner.hand].sort((a,b)=>a.sort-b.sort); // laag→hoog
-  const lSorted=[...loser.hand].sort((a,b)=>b.sort-a.sort);  // hoog→laag
-
-  const n=2;
-  const winnerGives=wSorted.slice(0,Math.min(n,wSorted.length));
-  const loserGives =lSorted.slice(0,Math.min(n,lSorted.length));
-
-  // Als er niets te ruilen valt, sla ruil over
-  if(winnerGives.length===0 && loserGives.length===0){
-    startModeSelect(room);
-    return;
-  }
-
-  room.swapState={
-    winnerId:    winner.id,
-    loserId:     loser.id,
-    winnerGives: winnerGives.map(c=>({rank:c.rank,suit:c.suit,id:c.id})),
-    loserGives:  loserGives.map(c=>({rank:c.rank,suit:c.suit,id:c.id})),
-    done: false,
-  };
-
-  // Voer ruil direct uit
-  for(const c of winnerGives){
-    winner.hand=winner.hand.filter(x=>x.id!==c.id);
-    loser.hand.push(c);
-  }
-  for(const c of loserGives){
-    loser.hand=loser.hand.filter(x=>x.id!==c.id);
-    winner.hand.push(c);
-  }
-
-  room.swapState.done=true;
-  room.phase="swap";
-
-  toast(room,
-    winner.name+" geeft "+winnerGives.length+"× laagste aan "+loser.name+
-    " · "+loser.name+" geeft "+loserGives.length+"× hoogste aan "+winner.name,
-    "info");
-
-  bcast(room);
-
-  // Na 5 sec naar modusbepaling
-  setTimeout(function(){
-    if(!rooms.has(room.code)) return;
-    startModeSelect(room);
-    bcast(room);
-  },5000);
-}
 
 // ════════════════════════════════════════════════════════════════
 // MODUS SELECTIE (winnaar kiest volgende spelvariant)
@@ -421,8 +362,8 @@ function startModeSelect(room){
   room.swapState=null;
   room.round=null;          // leeg de ronde zodat turnPlayerId null wordt
   room.turnIndex=0;
-  const winner=room.players.find(p=>p.id===(room.result&&room.result.winnerId));
-  toast(room,(winner?winner.name:"Winnaar")+" kiest de volgende spelvariant.","info");
+  const loser=room.players.find(p=>p.id===(room.result&&room.result.loserId));
+  toast(room,(loser?loser.name:"Verliezer")+" kiest de volgende spelvariant.","info");
   bcast(room);
 }
 
@@ -430,20 +371,122 @@ function startModeSelect(room){
 // NIEUW POTJE STARTEN
 // ════════════════════════════════════════════════════════════════
 function startNewGame(room,mode){
-  const prevWinnerId = room.result && room.result.winnerId ? room.result.winnerId : null;
+  // Bewaar winnaar/verliezer info VOOR we result clearen
+  const prevWinnerId = room.result && room.result.winnerId;
+  const prevLoserId  = room.result && room.result.loserId;
+
+  console.log("[GAME] startNewGame aangeroepen. Mode:", mode, "prevWinnerId:", prevWinnerId, "prevLoserId:", prevLoserId);
+
   room.gameMode   = mode||"traditioneel";
-  room.phase      = "playing";
   room.finishOrder= [];
-  room.result     = null;
   room.actLog     = [];
-  room.swapState  = null;
   syncGhost(room);
-  dealEqual(room);
-  // Winnaar van vorig potje opent
+  dealEqual(room);  // Deel NIEUWE kaarten
+
+  // Bepaal starter: winnaar van vorig potje
   let sid = prevWinnerId || room.hostId;
   if(!room.players.find(p=>p.id===sid&&p.hand.length>0))
     sid=(room.players.find(p=>p.hand.length>0&&!p.isGhost)||room.players[0]).id;
-  startRound(room,sid);
+
+  console.log("[GAME] Kaarten gedeeld. Nu swap starten...");
+
+  // Start swap-fase (10 sec popup) VOOR het spelen begint
+  startSwapPhase(room, prevWinnerId, prevLoserId, sid);
+}
+
+function startSwapPhase(room, prevWinnerId, prevLoserId, starterId){
+  const winner = room.players.find(p=>p.id===prevWinnerId);
+  const loser  = room.players.find(p=>p.id===prevLoserId);
+
+  console.log("[SWAP] startSwapPhase aangeroepen. winner:", winner?winner.name:"null", "loser:", loser?loser.name:"null");
+
+  // Geen swap mogelijk (eerste potje, ghost, of geen winnaar/verliezer)
+  if(!winner||!loser||winner.isGhost||loser.isGhost||!prevWinnerId||!prevLoserId){
+    console.log("[SWAP] Geen swap mogelijk. Start direct het spel.");
+    room.phase      = "playing";
+    room.result     = null;
+    room.swapState  = null;
+    startRound(room, starterId);
+    bcast(room);
+    return;
+  }
+
+  // Verliezer geeft 2 HOOGSTE aan winnaar
+  // Winnaar geeft 2 LAAGSTE aan verliezer
+  const lHand = [...loser.hand].sort((a,b)=>b.sort-a.sort);  // hoog→laag
+  const wHand = [...winner.hand].sort((a,b)=>a.sort-b.sort); // laag→hoog
+
+  const loserGives  = lHand.slice(0, Math.min(2, lHand.length));  // verliezer's 2 hoogste
+  const winnerGives = wHand.slice(0, Math.min(2, wHand.length)); // winnaar's 2 laagste
+
+  console.log("[SWAP] loserGives:", loserGives.map(c=>c.rank), "winnerGives:", winnerGives.map(c=>c.rank));
+
+  // Als er niets te ruilen valt
+  if(loserGives.length===0 && winnerGives.length===0){
+    console.log("[SWAP] Geen kaarten om te ruilen. Start direct het spel.");
+    room.phase      = "playing";
+    room.result     = null;
+    room.swapState  = null;
+    startRound(room, starterId);
+    bcast(room);
+    return;
+  }
+
+  // Bouw swapState VOOR de ruil (zodat we originele kaarten kunnen tonen)
+  room.swapState = {
+    winnerId:    winner.id,
+    winnerName:  winner.name,
+    winnerEmoji: winner.emoji,
+    loserId:     loser.id,
+    loserName:   loser.name,
+    loserEmoji:  loser.emoji,
+    loserGives:  loserGives.map(c=>({rank:c.rank, suit:c.suit, id:c.id})),
+    winnerGives: winnerGives.map(c=>({rank:c.rank, suit:c.suit, id:c.id})),
+    secondsLeft: 10,
+  };
+
+  // Voer de ruil UIT
+  for(const c of loserGives){
+    loser.hand  = loser.hand.filter(x=>x.id!==c.id);
+    winner.hand.push(c);
+  }
+  for(const c of winnerGives){
+    winner.hand = winner.hand.filter(x=>x.id!==c.id);
+    loser.hand.push(c);
+  }
+
+  console.log("[SWAP] Ruil uitgevoerd. Setting phase=swap en broadcasting...");
+
+  // Zet phase op SWAP (clients tonen popup)
+  room.phase  = "swap";
+  room.result = null; // Clear result zodat mode-select verdwijnt
+  bcast(room);
+
+  toast(room,
+    loser.name+" geeft "+loserGives.length+"× hoogste aan "+winner.name+
+    " · "+winner.name+" geeft "+winnerGives.length+"× laagste aan "+loser.name,
+    "info");
+
+  // Countdown 10 seconden
+  let countdown = 10;
+  const timer = setInterval(function(){
+    if(!rooms.has(room.code)){
+      clearInterval(timer);
+      return;
+    }
+    countdown--;
+    room.swapState.secondsLeft = countdown;
+    bcast(room);
+    
+    if(countdown<=0){
+      clearInterval(timer);
+      console.log("[SWAP] Countdown klaar. Start nu het spel.");
+      room.phase     = "playing";
+      room.swapState = null;
+      startRound(room, starterId);
+      bcast(room);
+    }
+  }, 1000);
 }
 
 function resetToLobby(room){
@@ -504,13 +547,13 @@ io.on("connection",function(socket){
     cb&&cb({ok:true});
   });
 
-  // Winnaar kiest volgende modus
+  // Verliezer kiest volgende modus
   socket.on("selectMode",function(data,cb){
     const room=rooms.get(socket.data.roomCode);
     if(!room)                         return cb&&cb({ok:false,error:"Kamer niet gevonden."});
     if(room.phase!=="modeSelect")        return cb&&cb({ok:false,error:"Niet in modusbepaling."});
-    if(socket.id!==(room.result&&room.result.winnerId))
-                                      return cb&&cb({ok:false,error:"Alleen de winnaar kiest."});
+    if(socket.id!==(room.result&&room.result.loserId))
+                                      return cb&&cb({ok:false,error:"Alleen de verliezer kiest."});
     const mode=data&&data.mode;
     if(!MODES[mode])                  return cb&&cb({ok:false,error:"Onbekende modus."});
     toast(room,MODES[mode].icon+" "+MODES[mode].label+" gekozen!","ok");
