@@ -334,14 +334,17 @@ function applySnap(snap){
 
   // Panels tonen op basis van fase
   // Toon swap overlay als phase = swap
-  if(state.phase==="swap"){
-    swapOverlay.className = "active";
-    renderSwap(state.swapState);
+  if (swapOverlay){
+    if(state.phase==="swap"){
+      swapOverlay.className = "active";
+      renderSwap(state.swapState);
+    } else {
+      swapOverlay.className = "";
+    }
   } else {
-    swapOverlay.className = "";
+    console.warn("[UI] swapOverlay ontbreekt in index.html");
   }
-  
-  modePanel.style.display   = state.phase==="modeSelect" ? "block" : "none";
+modePanel.style.display   = state.phase==="modeSelect" ? "block" : "none";
   endPanel.style.display    = "none";
   if(state.phase==="modeSelect")  renderModeSelect(state.modeOptions);
 }
