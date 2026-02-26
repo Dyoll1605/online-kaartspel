@@ -1,2 +1,6 @@
 node_modules/
 .DS_Store
+
+# local tooling
+_local_untracked/
+onecommand_patch_deploy.sh
