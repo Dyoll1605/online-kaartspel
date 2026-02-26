@@ -7,6 +7,17 @@ const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server);
 const PORT   = process.env.PORT || 3000;
+
+function allowedTwoIdsForSwap(player, want){
+  const sorted = player.hand.slice().sort((a,b)=> (a.sort-b.sort) || a.suit.localeCompare(b.suit));
+  if(sorted.length < 2) return new Set();
+  const pick = want === "highest" ? sorted.slice().reverse() : sorted;
+  const boundarySort = pick[1].sort;
+  const allowed = pick.filter(c => want === "highest" ? c.sort >= boundarySort : c.sort <= boundarySort);
+  return new Set(allowed.map(c=>c.id));
+}
+
+
 app.use(express.static(path.join(__dirname,"public")));
 
 const RANKS    = ["4","5","6","7","8","9","10","J","Q","K","A","2","3"];
@@ -194,7 +205,7 @@ function endRound(room,winnerId){
       return;
     }
     setTimeout(function(){ startRound(room,winnerId); bcast(room); },200);
-  },3000);
+  },8000);
 }
 
 // ════════════════════════════════════════════════════════════════
