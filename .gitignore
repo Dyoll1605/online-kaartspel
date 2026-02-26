@@ -4,3 +4,6 @@ node_modules/
 # local tooling
 _local_untracked/
 onecommand_patch_deploy.sh
+
+# generated backups
+backups/
